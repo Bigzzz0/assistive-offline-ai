@@ -7,7 +7,7 @@ object OcrPostValidator {
 
     // Thai Mobile/Landline phone patterns: e.g. 081-234-5678, 02-123-4567, 0812345678
     private val phonePattern = Pattern.compile(
-        """\b(0[1-9]\d{1,2})[-.\s]?(\d{3,4})[-.\s]?(\d{4})\b"""
+        """\b(0[1-9]\d{0,2})[-.\s]?(\d{3,4})[-.\s]?(\d{4})\b"""
     )
 
     // Thai Postal Code pattern (5 digits, e.g. 10100, 40000)

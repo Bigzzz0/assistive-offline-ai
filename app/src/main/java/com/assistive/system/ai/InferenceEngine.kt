@@ -126,7 +126,7 @@ class InferenceEngine(
      * วิเคราะห์ภาพและส่ง token stream กลับมา
      * @return Pair<Flow<String>, latencyMs callback>
      */
-    fun analyzeImageStream(bitmap: Bitmap, promptText: String): Flow<String> = flow {
+    fun analyzeImageStream(imageBytes: ByteArray, promptText: String): Flow<String> = flow {
         if (!isInitialized) {
             emit("ระบบยังไม่พร้อมใช้งาน")
             return@flow
@@ -154,10 +154,6 @@ class InferenceEngine(
             emit("เกิดข้อผิดพลาด: โมเดลไม่พร้อมใช้งาน")
             return@flow
         }
-
-        val stream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.PNG, 85, stream)
-        val imageBytes = stream.toByteArray()
 
         try {
             currentEngine.createConversation().use { conversation ->

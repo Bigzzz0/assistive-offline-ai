@@ -38,6 +38,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.view.KeyEvent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.assistive.system.download.ModelDownloader
@@ -95,8 +97,8 @@ class MainActivity : ComponentActivity() {
                 colorScheme = darkColorScheme(
                     primary = Color(0xFF10B981),   // Emerald
                     secondary = Color(0xFF3B82F6), // Blue
-                    background = Color(0xFF0F172A), // Slate 900
-                    surface = Color(0xFF1E293B)     // Slate 800
+                    background = Color.Black,       // True Black for high-contrast
+                    surface = Color(0xFF111111)     // High-contrast surface
                 )
             ) {
                 Surface(
@@ -136,6 +138,21 @@ class MainActivity : ComponentActivity() {
         }
         visionPipeline?.shutdown()
         cameraExecutor.shutdown()
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+            Log.i("MainActivity", "Volume Up pressed - triggering OCR")
+            assistiveService?.hapticManager?.vibrateGeneralInfo()
+            assistiveService?.handleVoiceCommand("อ่าน")
+            return true
+        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            Log.i("MainActivity", "Volume Down pressed - triggering Object ID")
+            assistiveService?.hapticManager?.vibrateGeneralInfo()
+            assistiveService?.handleVoiceCommand("ดู")
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     // ========================================
@@ -252,6 +269,7 @@ class MainActivity : ComponentActivity() {
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color.Black)
                     .clickable {
+                        assistiveService?.hapticManager?.vibrateGeneralInfo()
                         // Double tap area → trigger analyze immediately
                         assistiveService?.handleVoiceCommand("ดู")
                     }
@@ -271,12 +289,14 @@ class MainActivity : ComponentActivity() {
                                 context = ctx,
                                 lifecycleOwner = lifecycleOwner,
                                 isFrameRequested = { assistiveService?.hasPendingPrompt() == true }
-                            ) { bitmap ->
-                                assistiveService?.onCameraFrameAvailable(bitmap)
+                            ) { jpegBytes ->
+                                assistiveService?.onCameraFrameAvailable(jpegBytes)
                             }
 
+                            @Suppress("DEPRECATION")
                             val imageAnalysis = ImageAnalysis.Builder()
                                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                .setTargetResolution(android.util.Size(640, 480))
                                 .build()
                             imageAnalysis.setAnalyzer(cameraExecutor, visionPipeline!!.getAnalyzer())
 
@@ -317,22 +337,25 @@ class MainActivity : ComponentActivity() {
 
             // ---- Status Card ----
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF111111)),
                 shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .semantics { contentDescription = "สถานะระบบ: $statusText" }
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "สถานะระบบ: $statusText${if (perfMetrics.lastInferenceLatencyMs > 0) " การประมวลผลล่าสุดใช้เวลา ${perfMetrics.lastInferenceLatencyMs} มิลลิวินาที" else ""}"
+                    }
             ) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("สถานะระบบ", color = Color.LightGray, fontSize = 11.sp)
+                        Text("สถานะระบบ", color = Color.LightGray, fontSize = 12.sp)
                         Text(
                             statusText,
                             color = MaterialTheme.colorScheme.primary,
-                            fontSize = 15.sp,
+                            fontSize = 18.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -341,29 +364,31 @@ class MainActivity : ComponentActivity() {
                         Text(
                             "${perfMetrics.lastInferenceLatencyMs}ms",
                             color = if (perfMetrics.lastInferenceLatencyMs < 3000) Color(0xFF10B981) else Color(0xFFEF4444),
-                            fontSize = 14.sp,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // ---- AI Result Output ----
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                colors = CardDefaults.cardColors(containerColor = Color.Black),
                 shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(2.dp, Color.White),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 100.dp)
+                    .heightIn(min = 120.dp)
                     .clickable {
+                        assistiveService?.hapticManager?.vibrateGeneralInfo()
                         if (aiResultText.isNotEmpty()) {
                             assistiveService?.audioPipeline?.speak(aiResultText)
                         }
                     }
-                    .semantics {
-                        contentDescription = "คำอธิบายภาพ: ${if (aiResultText.isEmpty()) "ยังไม่มีการวิเคราะห์ สั่งการด้วยเสียงหรือแตะกล้องเพื่อเริ่ม" else aiResultText}"
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "คำอธิบายภาพจากเอไอ: ${if (aiResultText.isEmpty()) "ยังไม่มีการวิเคราะห์ สั่งการด้วยเสียงหรือแตะกล้องเพื่อเริ่ม" else aiResultText}"
                     }
             ) {
                 Box(
@@ -377,32 +402,62 @@ class MainActivity : ComponentActivity() {
                             "ระบบจะอธิบายภาพผ่านเสียงพูดและการสั่น\nพูดว่า \"ดู\", \"อ่าน\" หรือแตะกล้องเพื่อเริ่ม"
                         else aiResultText,
                         color = if (aiResultText.isEmpty()) Color.Gray else Color.White,
-                        fontSize = if (aiResultText.isEmpty()) 14.sp else 18.sp,
+                        fontSize = if (aiResultText.isEmpty()) 16.sp else 20.sp,
                         fontWeight = FontWeight.Medium,
                         textAlign = TextAlign.Center
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
-            // ---- Action buttons ----
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // ---- Stacked Big Action buttons ----
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 Button(
-                    onClick = { assistiveService?.handleVoiceCommand("อ่าน") },
+                    onClick = {
+                        assistiveService?.hapticManager?.vibrateGeneralInfo()
+                        assistiveService?.handleVoiceCommand("อ่าน")
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D4ED8)),
-                    modifier = Modifier.weight(1f).semantics { contentDescription = "ปุ่มอ่านข้อความ" }
-                ) { Text("📖 อ่าน", fontSize = 13.sp) }
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(60.dp)
+                        .semantics { contentDescription = "ปุ่มขนาดใหญ่สำหรับอ่านข้อความภาษาไทย" }
+                ) {
+                    Text("📖 อ่านข้อความ (OCR)", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
                 Button(
-                    onClick = { assistiveService?.handleVoiceCommand("ดู") },
+                    onClick = {
+                        assistiveService?.hapticManager?.vibrateGeneralInfo()
+                        assistiveService?.handleVoiceCommand("ดู")
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
-                    modifier = Modifier.weight(1f).semantics { contentDescription = "ปุ่มระบุสิ่งของ" }
-                ) { Text("👁 ดูสิ่งของ", fontSize = 13.sp) }
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(60.dp)
+                        .semantics { contentDescription = "ปุ่มขนาดใหญ่สำหรับสแกนระบุสิ่งของ" }
+                ) {
+                    Text("👁️ ดูสิ่งของบนโต๊ะ", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
                 Button(
-                    onClick = { assistiveService?.handleVoiceCommand("ข้างหน้า") },
+                    onClick = {
+                        assistiveService?.hapticManager?.vibrateGeneralInfo()
+                        assistiveService?.handleVoiceCommand("ข้างหน้า")
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB45309)),
-                    modifier = Modifier.weight(1f).semantics { contentDescription = "ปุ่มตรวจสอบสิ่งกีดขวาง" }
-                ) { Text("🚧 ข้างหน้า", fontSize = 13.sp) }
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(60.dp)
+                        .semantics { contentDescription = "ปุ่มขนาดใหญ่สำหรับตรวจสอบสิ่งกีดขวางข้างหน้า" }
+                ) {
+                    Text("🚧 ตรวจสิ่งกีดขวางข้างหน้า", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -410,11 +465,17 @@ class MainActivity : ComponentActivity() {
             // ---- Dev Panel + Model Manager toggles ----
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
-                    onClick = { showDevPanel = !showDevPanel },
+                    onClick = {
+                        assistiveService?.hapticManager?.vibrateGeneralInfo()
+                        showDevPanel = !showDevPanel
+                    },
                     modifier = Modifier.weight(1f)
                 ) { Text(if (showDevPanel) "ซ่อน Dev" else "📊 Dev Panel", fontSize = 12.sp) }
                 OutlinedButton(
-                    onClick = { showModelManager = !showModelManager },
+                    onClick = {
+                        assistiveService?.hapticManager?.vibrateGeneralInfo()
+                        showModelManager = !showModelManager
+                    },
                     modifier = Modifier.weight(1f)
                 ) { Text(if (showModelManager) "ซ่อนโมเดล" else "⬇️ จัดการโมเดล", fontSize = 12.sp) }
             }

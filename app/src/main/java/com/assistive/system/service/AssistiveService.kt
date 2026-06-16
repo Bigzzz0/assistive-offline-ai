@@ -112,7 +112,7 @@ class AssistiveService : Service() {
     }
 
     fun hasPendingPrompt(): Boolean {
-        return pendingPrompt != null
+        return pendingPrompt != null && !isAnalyzing
     }
 
     fun handleVoiceCommand(text: String) {
@@ -161,20 +161,20 @@ class AssistiveService : Service() {
     /**
      * Entry point for camera frames coming from VisionPipeline.
      */
-    fun onCameraFrameAvailable(bitmap: Bitmap) {
+    fun onCameraFrameAvailable(jpegBytes: ByteArray) {
         val prompt = pendingPrompt ?: return
         if (isAnalyzing) return
         isAnalyzing = true
         pendingPrompt = null // consume prompt
-
+ 
         _serviceStatus.value = "กำลังประมวลผลด้วย AI..."
         _inferenceOutput.value = ""
-
+ 
         serviceScope.launch {
             val fullResponse = StringBuilder()
             val startTime = System.currentTimeMillis()
-
-            inferenceEngine.analyzeImageStream(bitmap, prompt).collect { token ->
+ 
+            inferenceEngine.analyzeImageStream(jpegBytes, prompt).collect { token ->
                 fullResponse.append(token)
                 _inferenceOutput.value = fullResponse.toString()
             }

@@ -27,7 +27,7 @@ class VisionPipeline(
     private val context: Context,
     private val lifecycleOwner: LifecycleOwner,
     private val isFrameRequested: () -> Boolean,
-    private val onSceneChanged: (Bitmap) -> Unit
+    private val onSceneChanged: (ByteArray) -> Unit
 ) : SensorEventListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
@@ -104,6 +104,12 @@ class VisionPipeline(
 
     @OptIn(ExperimentalGetImage::class)
     private fun processImage(imageProxy: ImageProxy) {
+        // Zero-CPU idle frame gating: close imageProxy and return immediately if no active request
+        if (!isFrameRequested()) {
+            imageProxy.close()
+            return
+        }
+
         val image = imageProxy.image
         if (image == null || image.format != ImageFormat.YUV_420_888) {
             imageProxy.close()
@@ -133,11 +139,9 @@ class VisionPipeline(
         Log.d("VisionPipeline", "Frame processed: motion=$isMoving, diff=${String.format("%.3f", diff)}, changed=$hasSceneChanged, requested=$frameRequested")
 
         if (frameRequested || (!isMoving && hasSceneChanged)) {
-            // Convert current image proxy to a high-quality Bitmap for VLM model consumption
-            val bitmap = imageProxyToBitmap(imageProxy)
-            if (bitmap != null) {
-                onSceneChanged(bitmap)
-            }
+            // Convert current image proxy directly to a JPEG ByteArray for VLM model consumption
+            val jpegBytes = imageProxyToJpegBytes(imageProxy)
+            onSceneChanged(jpegBytes)
         }
 
         imageProxy.close()
@@ -180,7 +184,7 @@ class VisionPipeline(
         return totalDiff / maxPossibleDiff
     }
 
-    private fun imageProxyToBitmap(image: ImageProxy): Bitmap? {
+    private fun imageProxyToJpegBytes(image: ImageProxy): ByteArray {
         val yBuffer = image.planes[0].buffer
         val uBuffer = image.planes[1].buffer
         val vBuffer = image.planes[2].buffer
@@ -197,9 +201,8 @@ class VisionPipeline(
 
         val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
         val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 85, out)
-        val imageBytes = out.toByteArray()
-        return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 75, out)
+        return out.toByteArray()
     }
 
     fun shutdown() {

@@ -88,12 +88,14 @@ class AssistiveSystemUnitTest {
         val output = com.assistive.system.ai.OcrPostValidator.validateOcrResult(ocrInput)
         
         // Assert normalized formatting
-        assertTrue(output.contains("081-234-5678"))
-        assertTrue(output.contains("02-123-4567"))
+        assertTrue("Output should contain normalized 081: $output", output.contains("081-234-5678"))
+        assertTrue("Output should contain normalized 02: $output", output.contains("02-123-4567"))
         
         // Assert structural summary inclusion
-        assertTrue(output.contains("[ข้อมูลที่ตรวจยืนยันถูกต้อง]"))
-        assertTrue(output.contains("- เบอร์โทรศัพท์: 081-234-5678, 02-123-4567"))
-        assertTrue(output.contains("- รหัสไปรษณีย์: 40000"))
+        if (!output.contains("[ข้อมูลที่ตรวจยืนยันถูกต้อง]")) {
+            org.junit.Assert.fail("Output does not contain header. Output was: <$output>")
+        }
+        assertTrue("Output should contain verified phone: $output", output.contains("- เบอร์โทรศัพท์: 081-234-5678, 02-123-4567"))
+        assertTrue("Output should contain verified postcode: $output", output.contains("- รหัสไปรษณีย์: 40000"))
     }
 }
