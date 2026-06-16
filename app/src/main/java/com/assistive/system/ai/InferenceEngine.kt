@@ -67,54 +67,57 @@ class InferenceEngine(
             isInitialized = true
             return
         }
+        isMockMode = false
+    }
 
-        // Log LoRA adapter status
-        if (loraAdapterPath != null) {
-            Log.i("InferenceEngine", "LoRA adapter detected at $loraAdapterPath")
-        }
+    suspend fun initialize(): Boolean {
+        if (isMockMode) return true
+        return withContext(Dispatchers.IO) {
+            if (loraAdapterPath != null) {
+                Log.i("InferenceEngine", "LoRA adapter detected at $loraAdapterPath")
+            }
 
-        try {
-            val config = EngineConfig(
-                modelPath = modelPath,
-                backend = Backend.GPU(),
-                visionBackend = Backend.GPU(),
-                cacheDir = context.cacheDir.absolutePath
-            )
-            engine = Engine(config)
-            isMockMode = false
-            Log.i("InferenceEngine", "LiteRT-LM Engine configured with GPU acceleration.")
-        } catch (e: Exception) {
-            Log.e("InferenceEngine", "Failed GPU init: ${e.message}. Falling back to CPU.", e)
+            // 1. Try GPU first
             try {
+                Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on GPU...")
+                val config = EngineConfig(
+                    modelPath = modelPath,
+                    backend = Backend.GPU(),
+                    visionBackend = Backend.GPU(),
+                    cacheDir = context.cacheDir.absolutePath
+                )
+                val gpuEngine = Engine(config)
+                gpuEngine.initialize()
+                engine = gpuEngine
+                isInitialized = true
+                isMockMode = false
+                Log.i("InferenceEngine", "LiteRT-LM Engine initialized successfully with GPU acceleration.")
+                return@withContext true
+            } catch (e: Exception) {
+                Log.e("InferenceEngine", "GPU initialization failed: ${e.message}. Falling back to CPU.", e)
+            }
+
+            // 2. Fallback to CPU
+            try {
+                Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on CPU...")
                 val config = EngineConfig(
                     modelPath = modelPath,
                     backend = Backend.CPU(),
                     visionBackend = Backend.CPU(),
                     cacheDir = context.cacheDir.absolutePath
                 )
-                engine = Engine(config)
+                val cpuEngine = Engine(config)
+                cpuEngine.initialize()
+                engine = cpuEngine
+                isInitialized = true
                 isMockMode = false
-                Log.i("InferenceEngine", "LiteRT-LM Engine configured with CPU fallback.")
-            } catch (e2: Exception) {
-                Log.e("InferenceEngine", "Failed CPU init: ${e2.message}. Running Mock Mode.", e2)
-                isMockMode = true
-            }
-        }
-    }
-
-    suspend fun initialize(): Boolean {
-        if (isMockMode) return true
-        return withContext(Dispatchers.IO) {
-            try {
-                engine?.initialize()
-                isInitialized = true
-                Log.i("InferenceEngine", "LiteRT-LM Engine initialized successfully.")
-                true
+                Log.i("InferenceEngine", "LiteRT-LM Engine initialized successfully with CPU fallback.")
+                return@withContext true
             } catch (e: Exception) {
-                Log.e("InferenceEngine", "Initialization error: ${e.message}", e)
+                Log.e("InferenceEngine", "CPU initialization failed: ${e.message}. Running Mock Mode.", e)
                 isMockMode = true
                 isInitialized = true
-                true
+                return@withContext true
             }
         }
     }

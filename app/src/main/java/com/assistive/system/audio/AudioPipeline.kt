@@ -10,9 +10,9 @@ import android.os.Build
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
-import com.k2fsa.sherpa.onnx.OnlineRecognizer
-import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
-import com.k2fsa.sherpa.onnx.OnlineStream
+import com.k2fsa.sherpa.onnx.OfflineRecognizer
+import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
+import com.k2fsa.sherpa.onnx.OfflineStream
 import java.io.File
 import java.util.Locale
 import java.util.UUID
@@ -27,7 +27,7 @@ class AudioPipeline(
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
 
-    private var recognizer: OnlineRecognizer? = null
+    private var recognizer: OfflineRecognizer? = null
     private var isListening = false
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
@@ -71,7 +71,7 @@ class AudioPipeline(
         }
 
         try {
-            val config = OnlineRecognizerConfig().apply {
+            val config = OfflineRecognizerConfig().apply {
                 modelConfig.transducer.apply {
                     encoder = File(modelDirPath, "encoder.onnx").absolutePath
                     decoder = File(modelDirPath, "decoder.onnx").absolutePath
@@ -82,10 +82,10 @@ class AudioPipeline(
                 modelConfig.provider = "cpu"
                 featConfig.sampleRate = 16000
                 featConfig.featureDim = 80
-                enableEndpoint = true
+                decodingMethod = "greedy_search"
             }
-            recognizer = OnlineRecognizer(null, config)
-            Log.i("AudioPipeline", "Sherpa-ONNX Thai ASR initialized successfully.")
+            recognizer = OfflineRecognizer(null, config)
+            Log.i("AudioPipeline", "Sherpa-ONNX Thai ASR (OfflineRecognizer) initialized successfully.")
         } catch (e: Exception) {
             Log.e("AudioPipeline", "Failed to initialize Sherpa-ONNX: ${e.message}", e)
         }
@@ -124,39 +124,59 @@ class AudioPipeline(
 
         try {
             audioRecord = AudioRecord(audioSource, sampleRate, channelConfig, audioFormat, bufferSize)
-            val stream: OnlineStream = rec.createStream()
-
             audioRecord?.startRecording()
             recordingThread = thread(start = true) {
                 val buffer = ShortArray(bufferSize)
+                val audioData = mutableListOf<Float>()
+                var silenceFrames = 0
+                val maxSilenceFrames = 50 // ~1.0 second of silence at 20ms frames
+                
                 while (isListening) {
                     val readBytes = audioRecord?.read(buffer, 0, buffer.size) ?: -1
                     if (readBytes > 0) {
                         val floatBuffer = FloatArray(readBytes) { i -> buffer[i] / 32768.0f }
-                        stream.acceptWaveform(floatBuffer, sampleRate)
-
-                        while (rec.isReady(stream)) {
+                        
+                        // Calculate energy to check for silence
+                        var sum = 0.0f
+                        for (x in floatBuffer) sum += x * x
+                        val rms = kotlin.math.sqrt(sum / floatBuffer.size)
+                        
+                        if (rms < 0.01f) {
+                            silenceFrames++
+                        } else {
+                            silenceFrames = 0
+                        }
+                        
+                        for (x in floatBuffer) audioData.add(x)
+                        
+                        // If silence detected and we have audio data, decode
+                        if (silenceFrames >= maxSilenceFrames && audioData.size > 16000) {
+                            val stream = rec.createStream()
+                            stream.acceptWaveform(audioData.toFloatArray(), sampleRate)
                             rec.decode(stream)
-                        }
-
-                        val text = rec.getResult(stream).text.trim().lowercase()
-                        if (text.isNotEmpty()) {
-                            Log.d("AudioPipeline", "ASR recognized: $text")
-                            // Thai keyword detection — ขยายตาม Proposal Section 5.2
-                            if (matchKeyword(text)) {
-                                onKeywordDetected(text)
+                            val text = rec.getResult(stream).text.trim().lowercase()
+                            if (text.isNotEmpty()) {
+                                Log.d("AudioPipeline", "ASR recognized: $text")
+                                // Thai keyword detection — ขยายตาม Proposal Section 5.2
+                                if (matchKeyword(text)) {
+                                    onKeywordDetected(text)
+                                }
                             }
+                            stream.release()
+                            audioData.clear()
+                            silenceFrames = 0
                         }
-
-                        if (rec.isEndpoint(stream)) {
-                            rec.reset(stream)
+                        
+                        // Limit buffer size to prevent memory leak if continuous noise
+                        if (audioData.size > 16000 * 10) { // Max 10 seconds of audio
+                            audioData.clear()
+                            silenceFrames = 0
                         }
                     }
                     Thread.sleep(20)
                 }
-                stream.release()
             }
-            Log.i("AudioPipeline", "Microphone listening started (Real ASR mode).")
+            Log.i("AudioPipeline", "Microphone listening started (Real ASR mode with OfflineRecognizer).")
         } catch (e: SecurityException) {
             Log.e("AudioPipeline", "Audio permission not granted: ${e.message}")
             isListening = false

@@ -35,28 +35,25 @@ enum class ModelFile(
     ASR_ENCODER(
         displayName = "ASR Encoder (Thai)",
         fileName = "encoder.onnx",
-        url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-thai-2024-06-20.tar.bz2",
+        url = "https://huggingface.co/yfyeung/icefall-asr-gigaspeech2-th-zipformer-2024-06-20/resolve/main/exp/encoder-epoch-12-avg-5.int8.onnx",
         subDir = "sherpa-onnx-thai"
     ),
-    // NOTE: Encoder, Decoder, Joiner, Tokens are packed in a single tar.bz2 archive.
-    // We download the archive once then extract. The enum entry above handles the whole pack.
-    // For simplicity in this implementation, we download individual model files from a mirror.
     ASR_DECODER(
         displayName = "ASR Decoder (Thai)",
         fileName = "decoder.onnx",
-        url = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-thai-2024-06-20/resolve/main/decoder.onnx",
+        url = "https://huggingface.co/yfyeung/icefall-asr-gigaspeech2-th-zipformer-2024-06-20/resolve/main/exp/decoder-epoch-12-avg-5.int8.onnx",
         subDir = "sherpa-onnx-thai"
     ),
     ASR_JOINER(
         displayName = "ASR Joiner (Thai)",
         fileName = "joiner.onnx",
-        url = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-thai-2024-06-20/resolve/main/joiner.onnx",
+        url = "https://huggingface.co/yfyeung/icefall-asr-gigaspeech2-th-zipformer-2024-06-20/resolve/main/exp/joiner-epoch-12-avg-5.int8.onnx",
         subDir = "sherpa-onnx-thai"
     ),
     ASR_TOKENS(
         displayName = "ASR Tokens (Thai)",
         fileName = "tokens.txt",
-        url = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-thai-2024-06-20/resolve/main/tokens.txt",
+        url = "https://huggingface.co/yfyeung/icefall-asr-gigaspeech2-th-zipformer-2024-06-20/resolve/main/data/lang_bpe_2000/tokens.txt",
         subDir = "sherpa-onnx-thai"
     );
     // NOTE: VLM model (gemma_vlm.litertlm, ~1.5GB) must be downloaded separately
@@ -149,6 +146,7 @@ object ModelDownloader {
      * ดาวน์โหลดโมเดล ASR (ทุกไฟล์)
      */
     fun getAsrModelFiles(): List<ModelFile> = listOf(
+        ModelFile.ASR_ENCODER,
         ModelFile.ASR_DECODER,
         ModelFile.ASR_JOINER,
         ModelFile.ASR_TOKENS

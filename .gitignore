@@ -21,3 +21,8 @@ build/
 
 # Local configuration files
 local.properties
+
+# Temporary Download Models
+temp_models/
+screen.png
+
