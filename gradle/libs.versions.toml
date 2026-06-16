@@ -39,7 +39,7 @@ androidx-camera-extensions = { group = "androidx.camera", name = "camera-extensi
 google-litert-lm = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertLm" }
 
 # Sherpa-ONNX ASR
-sherpa-onnx = { group = "com.k2fsa.sherpa.onnx", name = "sherpa-onnx-android", version.ref = "sherpaOnnx" }
+sherpa-onnx = { group = "com.k2fsa.sherpa-onnx", name = "sherpa-onnx-android", version.ref = "sherpaOnnx" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
