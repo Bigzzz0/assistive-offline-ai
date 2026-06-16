@@ -26,6 +26,7 @@ import kotlin.math.sqrt
 class VisionPipeline(
     private val context: Context,
     private val lifecycleOwner: LifecycleOwner,
+    private val isFrameRequested: () -> Boolean,
     private val onSceneChanged: (Bitmap) -> Unit
 ) : SensorEventListener {
 
@@ -128,9 +129,10 @@ class VisionPipeline(
         // - The scene difference exceeds our threshold (visual change occurred)
         val hasSceneChanged = diff > SCENE_DIFF_THRESHOLD
         
-        Log.d("VisionPipeline", "Frame processed: motion=$isMoving, diff=${String.format("%.3f", diff)}, changed=$hasSceneChanged")
+        val frameRequested = isFrameRequested()
+        Log.d("VisionPipeline", "Frame processed: motion=$isMoving, diff=${String.format("%.3f", diff)}, changed=$hasSceneChanged, requested=$frameRequested")
 
-        if (!isMoving && hasSceneChanged) {
+        if (frameRequested || (!isMoving && hasSceneChanged)) {
             // Convert current image proxy to a high-quality Bitmap for VLM model consumption
             val bitmap = imageProxyToBitmap(imageProxy)
             if (bitmap != null) {

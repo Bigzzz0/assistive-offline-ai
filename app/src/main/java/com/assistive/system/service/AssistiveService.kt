@@ -95,7 +95,11 @@ class AssistiveService : Service() {
         return binder
     }
 
-    private fun handleVoiceCommand(text: String) {
+    fun hasPendingPrompt(): Boolean {
+        return pendingPrompt != null
+    }
+
+    fun handleVoiceCommand(text: String) {
         val prompt = text.lowercase()
         Log.i("AssistiveService", "Voice Command received: $prompt")
         
