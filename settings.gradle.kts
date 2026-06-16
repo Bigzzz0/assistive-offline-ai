@@ -10,7 +10,6 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven { url = java.net.URI("https://maven.pkg.github.com/k2fsa/sherpa-onnx") }
     }
 }
 
