@@ -147,7 +147,8 @@ class InferenceEngine(
                 var isLowConfidence = false
 
                 conversation.sendMessageAsync(contents).collect { token ->
-                    responseBuilder.append(token)
+                    val tokenStr = token.toString()
+                    responseBuilder.append(tokenStr)
                     
                     // Simple streaming check: if we see "ความมั่นใจ: ต่ำ" in the accumulating response,
                     // we immediately flag it for fallback.
@@ -157,7 +158,7 @@ class InferenceEngine(
                     }
                     
                     if (!isLowConfidence) {
-                        emit(token)
+                        emit(tokenStr)
                     }
                 }
 

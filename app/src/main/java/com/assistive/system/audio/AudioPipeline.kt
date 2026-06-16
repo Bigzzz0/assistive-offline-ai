@@ -61,7 +61,7 @@ class AudioPipeline(
                 featConfig.featureDim = 80
                 enableEndpoint = true
             }
-            recognizer = OnlineRecognizer(config)
+            recognizer = OnlineRecognizer(context.assets, config)
             Log.i("AudioPipeline", "Sherpa-ONNX Recognizer initialized successfully.")
         } catch (e: Exception) {
             Log.e("AudioPipeline", "Failed to initialize Sherpa-ONNX: ${e.message}", e)
