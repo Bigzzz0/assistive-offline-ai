@@ -40,8 +40,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.assistive.system.download.ModelDownloader
+import com.assistive.system.download.ModelFile
+import com.assistive.system.download.ModelManager
+import com.assistive.system.monitoring.PerformanceMetrics
 import com.assistive.system.service.AssistiveService
 import com.assistive.system.vision.VisionPipeline
+import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -88,10 +93,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(
-                    primary = Color(0xFF10B981), // Emerald
+                    primary = Color(0xFF10B981),   // Emerald
                     secondary = Color(0xFF3B82F6), // Blue
                     background = Color(0xFF0F172A), // Slate 900
-                    surface = Color(0xFF1E293B) // Slate 800
+                    surface = Color(0xFF1E293B)     // Slate 800
                 )
             ) {
                 Surface(
@@ -105,10 +110,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkPermissionsAndStart() {
-        val cameraPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-        val audioPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+        val cameraOk = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val audioOk = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-        if (cameraPermission == PackageManager.PERMISSION_GRANTED && audioPermission == PackageManager.PERMISSION_GRANTED) {
+        if (cameraOk && audioOk) {
             startAssistiveService()
         } else {
             requestPermissionLauncher.launch(
@@ -133,12 +138,48 @@ class MainActivity : ComponentActivity() {
         cameraExecutor.shutdown()
     }
 
+    // ========================================
+    // MAIN SCREEN COMPOSABLE
+    // ========================================
     @Composable
     fun AssistiveMainScreen() {
         val context = LocalContext.current
         val lifecycleOwner = LocalLifecycleOwner.current
+        // (coroutineScope is used in ModelManagerPanel)
 
-        // Bind states from Service
+        // ---- Disclaimer dialog (shown once per app session) ----
+        var disclaimerShown by remember { mutableStateOf(false) }
+        if (!disclaimerShown) {
+            AlertDialog(
+                onDismissRequest = {},
+                containerColor = Color(0xFF1E293B),
+                title = {
+                    Text("⚠️ ข้อควรระวัง", color = Color.White, fontWeight = FontWeight.Bold)
+                },
+                text = {
+                    Text(
+                        "ระบบนี้เป็นเครื่องมือช่วยเหลือเสริม ไม่ได้ออกแบบมาเพื่อการนำทางโดยตรง\n\n" +
+                        "อาจให้ข้อมูลไม่ถูกต้องในบางสถานการณ์ กรุณาใช้วิจารณญาณร่วมด้วยและใช้ไม้เท้าหรืออุปกรณ์ช่วยเหลืออื่นร่วมกัน",
+                        color = Color.LightGray,
+                        fontSize = 14.sp
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { disclaimerShown = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = "รับทราบข้อควรระวัง" }
+                    ) {
+                        Text("รับทราบและเข้าใจแล้ว", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            )
+            return
+        }
+
+        // ---- State bindings ----
         val statusText by if (isBound && assistiveService != null) {
             assistiveService!!.serviceStatus.collectAsState()
         } else {
@@ -151,7 +192,14 @@ class MainActivity : ComponentActivity() {
             remember { mutableStateOf("") }
         }
 
+        val perfMetrics by if (isBound && assistiveService != null) {
+            assistiveService!!.performanceMonitor.metrics.collectAsState()
+        } else {
+            remember { mutableStateOf(PerformanceMetrics()) }
+        }
+
         var showDevPanel by remember { mutableStateOf(false) }
+        var showModelManager by remember { mutableStateOf(false) }
 
         Column(
             modifier = Modifier
@@ -160,38 +208,65 @@ class MainActivity : ComponentActivity() {
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Header
-            Text(
-                text = "ASSISTIVE OFFLINE AI",
-                color = Color.White,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 12.dp)
-            )
-            // Camera Viewport / Layout
+            // ---- Header with mode badge ----
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "ASSISTIVE OFFLINE AI",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                // Mode badge
+                val isRealMode = perfMetrics.isVlmReal || perfMetrics.isAsrReal
+                Surface(
+                    color = if (perfMetrics.isVlmReal && perfMetrics.isAsrReal) Color(0xFF10B981)
+                            else if (isRealMode) Color(0xFFF59E0B)
+                            else Color(0xFF6B7280),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(
+                        text = when {
+                            perfMetrics.isVlmReal && perfMetrics.isAsrReal -> "✅ Real Mode"
+                            isRealMode -> "⚡ Partial"
+                            else -> "⚠️ Mock"
+                        },
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ---- Camera Viewport ----
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(260.dp)
+                    .height(250.dp)
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color.Black)
+                    .clickable {
+                        // Double tap area → trigger analyze immediately
+                        assistiveService?.handleVoiceCommand("ดู")
+                    }
+                    .semantics { contentDescription = "หน้าต่างกล้อง แตะสองครั้งเพื่อวิเคราะห์ภาพทันที" }
             ) {
                 AndroidView(
                     factory = { ctx ->
                         val previewView = PreviewView(ctx)
-                        
-                        // Setup CameraX once Service is ready and VisionPipeline isn't initialized yet
                         val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
                         cameraProviderFuture.addListener({
                             val cameraProvider = cameraProviderFuture.get()
                             val preview = Preview.Builder().build().also {
                                 it.setSurfaceProvider(previewView.surfaceProvider)
                             }
-                            
-                            // Define Vision Pipeline
+
                             visionPipeline = VisionPipeline(
                                 context = ctx,
                                 lifecycleOwner = lifecycleOwner,
@@ -205,13 +280,11 @@ class MainActivity : ComponentActivity() {
                                 .build()
                             imageAnalysis.setAnalyzer(cameraExecutor, visionPipeline!!.getAnalyzer())
 
-                            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
                             try {
                                 cameraProvider.unbindAll()
                                 cameraProvider.bindToLifecycle(
                                     lifecycleOwner,
-                                    cameraSelector,
+                                    CameraSelector.DEFAULT_BACK_CAMERA,
                                     preview,
                                     imageAnalysis
                                 )
@@ -219,56 +292,79 @@ class MainActivity : ComponentActivity() {
                                 Log.e("MainActivity", "Camera binding failed: ${e.message}")
                             }
                         }, ContextCompat.getMainExecutor(ctx))
-
                         previewView
                     },
                     modifier = Modifier.fillMaxSize()
                 )
+                // "Tap to analyze" hint overlay
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(8.dp)
+                ) {
+                    Text(
+                        text = "แตะเพื่อวิเคราะห์ภาพ",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        modifier = Modifier
+                            .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Main Status Display
+            // ---- Status Card ----
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .semantics { contentDescription = "สถานะการเชื่อมต่อ: $statusText" }
+                    .semantics { contentDescription = "สถานะระบบ: $statusText" }
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "สถานะระบบ",
-                        color = Color.LightGray,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = statusText,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("สถานะระบบ", color = Color.LightGray, fontSize = 11.sp)
+                        Text(
+                            statusText,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    // Quick perf badge
+                    if (perfMetrics.lastInferenceLatencyMs > 0) {
+                        Text(
+                            "${perfMetrics.lastInferenceLatencyMs}ms",
+                            color = if (perfMetrics.lastInferenceLatencyMs < 3000) Color(0xFF10B981) else Color(0xFFEF4444),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Large Output Display for Visually Impaired Voice Feedback representation
+            // ---- AI Result Output ----
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 120.dp)
+                    .heightIn(min = 100.dp)
                     .clickable {
-                        // Repeating the reading out when clicking on the output card
                         if (aiResultText.isNotEmpty()) {
                             assistiveService?.audioPipeline?.speak(aiResultText)
                         }
                     }
-                    .semantics { contentDescription = "คำอธิบายภาพ: ${if (aiResultText.isEmpty()) "ไม่มีข้อมูล" else aiResultText}" }
+                    .semantics {
+                        contentDescription = "คำอธิบายภาพ: ${if (aiResultText.isEmpty()) "ยังไม่มีการวิเคราะห์ สั่งการด้วยเสียงหรือแตะกล้องเพื่อเริ่ม" else aiResultText}"
+                    }
             ) {
                 Box(
                     modifier = Modifier
@@ -277,35 +373,249 @@ class MainActivity : ComponentActivity() {
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = if (aiResultText.isEmpty()) "ระบบจะอธิบายภาพสภาพแวดล้อมตรงหน้าผ่านเสียงพูดและการสั่นเมื่อผู้ใช้สั่งการ" else aiResultText,
+                        text = if (aiResultText.isEmpty())
+                            "ระบบจะอธิบายภาพผ่านเสียงพูดและการสั่น\nพูดว่า \"ดู\", \"อ่าน\" หรือแตะกล้องเพื่อเริ่ม"
+                        else aiResultText,
                         color = if (aiResultText.isEmpty()) Color.Gray else Color.White,
-                        fontSize = 20.sp,
+                        fontSize = if (aiResultText.isEmpty()) 14.sp else 18.sp,
                         fontWeight = FontWeight.Medium,
                         textAlign = TextAlign.Center
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Dev Panel toggle button
-            Button(
-                onClick = { showDevPanel = !showDevPanel },
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(text = if (showDevPanel) "ซ่อนแผงผู้พัฒนา (Hide Developer Panel)" else "แสดงแผงผู้พัฒนา (Show Developer Panel)")
+            // ---- Action buttons ----
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { assistiveService?.handleVoiceCommand("อ่าน") },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D4ED8)),
+                    modifier = Modifier.weight(1f).semantics { contentDescription = "ปุ่มอ่านข้อความ" }
+                ) { Text("📖 อ่าน", fontSize = 13.sp) }
+                Button(
+                    onClick = { assistiveService?.handleVoiceCommand("ดู") },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                    modifier = Modifier.weight(1f).semantics { contentDescription = "ปุ่มระบุสิ่งของ" }
+                ) { Text("👁 ดูสิ่งของ", fontSize = 13.sp) }
+                Button(
+                    onClick = { assistiveService?.handleVoiceCommand("ข้างหน้า") },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB45309)),
+                    modifier = Modifier.weight(1f).semantics { contentDescription = "ปุ่มตรวจสอบสิ่งกีดขวาง" }
+                ) { Text("🚧 ข้างหน้า", fontSize = 13.sp) }
             }
 
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // ---- Dev Panel + Model Manager toggles ----
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { showDevPanel = !showDevPanel },
+                    modifier = Modifier.weight(1f)
+                ) { Text(if (showDevPanel) "ซ่อน Dev" else "📊 Dev Panel", fontSize = 12.sp) }
+                OutlinedButton(
+                    onClick = { showModelManager = !showModelManager },
+                    modifier = Modifier.weight(1f)
+                ) { Text(if (showModelManager) "ซ่อนโมเดล" else "⬇️ จัดการโมเดล", fontSize = 12.sp) }
+            }
+
+            // ---- Performance Stats Panel ----
             if (showDevPanel) {
-                Spacer(modifier = Modifier.height(16.dp))
-                DeveloperPanel(context)
+                Spacer(modifier = Modifier.height(12.dp))
+                PerformancePanel(perfMetrics)
+                Spacer(modifier = Modifier.height(8.dp))
+                DeveloperPanel()
+            }
+
+            // ---- Model Manager Panel ----
+            if (showModelManager) {
+                Spacer(modifier = Modifier.height(12.dp))
+                ModelManagerPanel(context)
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+
+    // ========================================
+    // PERFORMANCE STATS PANEL
+    // ========================================
+    @Composable
+    fun PerformancePanel(metrics: PerformanceMetrics) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F2039)),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    "📈 Performance Metrics (Proposal §6.1)",
+                    color = Color(0xFF38BDF8),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                val rows = listOf(
+                    Triple("Inference Latency", "${metrics.lastInferenceLatencyMs} ms", metrics.lastInferenceLatencyMs < 3000),
+                    Triple("Token Rate", "${"%.1f".format(metrics.tokenRatePerSec)} t/s", metrics.tokenRatePerSec >= 8f || !metrics.isVlmReal),
+                    Triple("Memory Usage", "${metrics.memoryUsageMB} MB", metrics.memoryUsageMB < 4000),
+                    Triple("Temperature", "${"%.0f".format(metrics.temperatureCelsius)} °C", metrics.temperatureCelsius < 45f),
+                    Triple("Battery Drain", "${"%.1f".format(metrics.batteryDrainMahPerMin)} mAh/min", metrics.batteryDrainMahPerMin < 15f),
+                    Triple("Total Inferences", "${metrics.totalInferenceCount} (avg ${metrics.averageLatencyMs}ms)", true)
+                )
+                rows.forEach { (label, value, ok) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(label, color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Text(
+                            "${if (ok) "✅" else "❌"} $value",
+                            color = if (ok) Color(0xFF10B981) else Color(0xFFEF4444),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+                HorizontalDivider(color = Color.Gray.copy(alpha = 0.3f), modifier = Modifier.padding(vertical = 6.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("VLM: ${if (metrics.isVlmReal) "Gemma Real ✅" else "Mock ⚠️"}", color = Color.LightGray, fontSize = 11.sp)
+                    Text("ASR: ${if (metrics.isAsrReal) "Sherpa Real ✅" else "Mock ⚠️"}", color = Color.LightGray, fontSize = 11.sp)
+                }
             }
         }
     }
 
+    // ========================================
+    // MODEL MANAGER PANEL
+    // ========================================
     @Composable
-    fun DeveloperPanel(context: Context) {
+    fun ModelManagerPanel(context: Context) {
+        val coroutineScope = rememberCoroutineScope()
+        val modelManager = remember { ModelManager(context) }
+        var asrDownloadProgress by remember { mutableStateOf(-1f) }
+        var asrStatusText by remember { mutableStateOf("") }
+        var isDownloading by remember { mutableStateOf(false) }
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2744)),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("⬇️ จัดการโมเดล AI", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Model status summary
+                Text(
+                    "📦 VLM (Gemma 4 E2B): ${if (modelManager.isVlmReady()) "✅ พร้อม (${modelManager.getVlmFileSizeMB()} MB)" else "❌ ยังไม่ได้โหลด"}",
+                    color = if (modelManager.isVlmReady()) Color(0xFF10B981) else Color(0xFFEF4444),
+                    fontSize = 13.sp
+                )
+                Text(
+                    "🎙️ ASR Thai: ${if (modelManager.isAsrReady()) "✅ พร้อม (${modelManager.getAsrFileSizeMB()} MB)" else "❌ ยังไม่ได้ดาวน์โหลด"}",
+                    color = if (modelManager.isAsrReady()) Color(0xFF10B981) else Color(0xFFEF4444),
+                    fontSize = 13.sp
+                )
+                Text(
+                    "💾 พื้นที่ว่าง: ${modelManager.getAvailableSpaceMB()} MB",
+                    color = Color.LightGray,
+                    fontSize = 12.sp
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // VLM: manual ADB instruction
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF2D3748)),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("📋 วิธีโหลด VLM (Gemma 4 2B ~1.5 GB)", color = Color(0xFFFBBF24), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            "1. ดาวน์โหลดจาก:\nhttps://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm\n\n" +
+                            "2. Push ไฟล์เข้าอุปกรณ์:\nadb push gemma-4-E2B-it.litertlm " +
+                            "${context.filesDir.absolutePath}/gemma_vlm.litertlm",
+                            color = Color(0xFFE2E8F0),
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // ASR: auto download
+                if (!modelManager.isAsrReady()) {
+                    if (asrDownloadProgress >= 0f && asrDownloadProgress < 1f) {
+                        LinearProgressIndicator(
+                            progress = { asrDownloadProgress },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            color = Color(0xFF3B82F6)
+                        )
+                        Text(asrStatusText, color = Color.LightGray, fontSize = 11.sp)
+                    } else {
+                        Button(
+                            onClick = {
+                                if (!isDownloading) {
+                                    isDownloading = true
+                                    coroutineScope.launch {
+                                        val files = listOf(
+                                            ModelFile.ASR_DECODER,
+                                            ModelFile.ASR_JOINER,
+                                            ModelFile.ASR_TOKENS
+                                        )
+                                        for (modelFile in files) {
+                                            val destFile = modelManager.getDestFile(modelFile)
+                                            ModelDownloader.downloadFile(modelFile.url, destFile, modelFile.displayName)
+                                                .collect { progress ->
+                                                    asrDownloadProgress = progress.progressPercent
+                                                    asrStatusText = "${progress.fileName}: ${"%.0f".format(progress.progressPercent * 100)}%"
+                                                    if (progress.error != null) {
+                                                        asrStatusText = "❌ ${progress.error}"
+                                                    }
+                                                }
+                                        }
+                                        isDownloading = false
+                                        asrDownloadProgress = -1f
+                                        if (modelManager.isAsrReady()) {
+                                            assistiveService?.reinitializePipelines()
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = !isDownloading,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("⬇️ ดาวน์โหลด ASR Thai Model (~50 MB)", fontSize = 13.sp)
+                        }
+                        if (asrStatusText.isNotEmpty()) {
+                            Text(asrStatusText, color = Color(0xFFEF4444), fontSize = 11.sp)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Reload button (after manual ADB push)
+                Button(
+                    onClick = { assistiveService?.reinitializePipelines() },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("🔄 โหลดโมเดลใหม่ (หลัง ADB push)", fontSize = 13.sp)
+                }
+            }
+        }
+    }
+
+    // ========================================
+    // DEVELOPER PANEL
+    // ========================================
+    @Composable
+    fun DeveloperPanel() {
         Card(
             colors = CardDefaults.cardColors(containerColor = Color(0xFF334155)),
             shape = RoundedCornerShape(12.dp),
@@ -313,96 +623,76 @@ class MainActivity : ComponentActivity() {
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "Developer Controls & Stats",
+                    text = "🛠 Developer Controls",
                     color = Color.White,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
-                // Mock memory stat
-                val runtime = Runtime.getRuntime()
-                val usedMemory = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
                 Text(
-                    text = "JVM Memory usage: $usedMemory MB / ${runtime.maxMemory() / (1024 * 1024)} MB",
-                    color = Color.Yellow,
-                    fontSize = 13.sp
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Simulate Voice Command Inputs directly via Buttons
-                Text(
-                    text = "Simulate Voice Commands (คำสั่งปุ่มสัมผัส):",
+                    text = "Simulate Voice Commands:",
                     color = Color.LightGray,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
                 )
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Button(
                         onClick = { assistiveService?.handleVoiceCommand("อ่าน") },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
-                        modifier = Modifier.weight(1f).padding(end = 4.dp)
-                    ) {
-                        Text("อ่านข้อความ", fontSize = 11.sp)
-                    }
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D4ED8)),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("อ่านข้อความ", fontSize = 10.sp) }
                     Button(
                         onClick = { assistiveService?.handleVoiceCommand("ดู") },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
-                        modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
-                    ) {
-                        Text("ระบุสิ่งของ", fontSize = 11.sp)
-                    }
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("ระบุสิ่งของ", fontSize = 10.sp) }
                     Button(
                         onClick = { assistiveService?.handleVoiceCommand("ข้างหน้า") },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
-                        modifier = Modifier.weight(1f).padding(start = 4.dp)
-                    ) {
-                        Text("เช็คทางเดิน", fontSize = 11.sp)
-                    }
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB45309)),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("เช็คทางเดิน", fontSize = 10.sp) }
+                }
+
+                Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Button(
+                        onClick = { assistiveService?.handleVoiceCommand("มีอะไร") },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("สภาพแวดล้อม", fontSize = 10.sp) }
+                    Button(
+                        onClick = { assistiveService?.handleVoiceCommand("อันตราย") },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF991B1B)),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("ตรวจอันตราย", fontSize = 10.sp) }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Manually trigger haptic testing
                 Text(
-                    text = "Test Haptic Alerts (ทดสอบระดับสั่น):",
+                    text = "Test Haptic Alerts (3 ระดับตาม Proposal):",
                     color = Color.LightGray,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
                 )
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Button(
                         onClick = { assistiveService?.hapticManager?.vibrateGeneralInfo() },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                        modifier = Modifier.weight(1f).padding(end = 4.dp)
-                    ) {
-                        Text("Level 1 (ทั่วไป)", fontSize = 10.sp)
-                    }
+                        modifier = Modifier.weight(1f).semantics { contentDescription = "ทดสอบสั่น ระดับ 1 ข้อมูลทั่วไป" }
+                    ) { Text("Lv1 ทั่วไป", fontSize = 10.sp) }
                     Button(
                         onClick = { assistiveService?.hapticManager?.vibrateWarning() },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B)),
-                        modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
-                    ) {
-                        Text("Level 2 (เตือน)", fontSize = 10.sp)
-                    }
+                        modifier = Modifier.weight(1f).semantics { contentDescription = "ทดสอบสั่น ระดับ 2 เตือน" }
+                    ) { Text("Lv2 เตือน", fontSize = 10.sp) }
                     Button(
                         onClick = { assistiveService?.hapticManager?.vibrateDanger() },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
-                        modifier = Modifier.weight(1f).padding(start = 4.dp)
-                    ) {
-                        Text("Level 3 (อันตราย)", fontSize = 10.sp)
-                    }
+                        modifier = Modifier.weight(1f).semantics { contentDescription = "ทดสอบสั่น ระดับ 3 อันตราย" }
+                    ) { Text("Lv3 อันตราย", fontSize = 10.sp) }
                 }
             }
         }

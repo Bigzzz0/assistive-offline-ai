@@ -18,6 +18,7 @@ import com.assistive.system.MainActivity
 import com.assistive.system.ai.InferenceEngine
 import com.assistive.system.audio.AudioPipeline
 import com.assistive.system.haptic.HapticManager
+import com.assistive.system.monitoring.PerformanceMonitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,6 +38,8 @@ class AssistiveService : Service() {
     lateinit var inferenceEngine: InferenceEngine
         private set
     lateinit var hapticManager: HapticManager
+        private set
+    lateinit var performanceMonitor: PerformanceMonitor
         private set
 
     // Service state
@@ -66,6 +69,7 @@ class AssistiveService : Service() {
 
         // 2. Initialize pipelines
         hapticManager = HapticManager(this)
+        performanceMonitor = PerformanceMonitor(this)
         audioPipeline = AudioPipeline(this)
         inferenceEngine = InferenceEngine(this)
 
@@ -73,15 +77,27 @@ class AssistiveService : Service() {
         serviceScope.launch {
             _serviceStatus.value = "กำลังเตรียมแบบจำลองภาษา..."
             val success = inferenceEngine.initialize()
+            val isVlmReal = !inferenceEngine.isMockMode()
+            val isAsrReal = audioPipeline.isAsrReady()
+            performanceMonitor.updateVlmMode(isVlmReal)
+            performanceMonitor.updateAsrMode(isAsrReal)
+            performanceMonitor.startBatteryTracking()
+
+            val modeLabel = when {
+                isVlmReal && isAsrReal -> "Real Mode ✅"
+                isVlmReal -> "VLM จริง / ASR จำลอง"
+                isAsrReal -> "VLM จำลอง / ASR จริง"
+                else -> "⚠️ Mock Mode — ดาวน์โหลดโมเดลก่อนใช้งาน"
+            }
+
             if (success) {
-                _serviceStatus.value = "ระบบพร้อมทำงาน - พูดสั่งการเพื่อเริ่มต้น"
+                _serviceStatus.value = "ระบบพร้อมทำงาน ($modeLabel)"
                 hapticManager.vibrateGeneralInfo()
-                // Start listening to voice keywords offline
                 audioPipeline.startListening { text ->
                     handleVoiceCommand(text)
                 }
             } else {
-                _serviceStatus.value = "โมเดลขัดข้อง กรุณาตรวจสอบไฟล์โมเดล"
+                _serviceStatus.value = "ระบบขัดข้อง กรุณาตรวจสอบไฟล์โมเดล"
             }
         }
     }
@@ -127,6 +143,18 @@ class AssistiveService : Service() {
                 hapticManager.vibrateWarning()
                 audioPipeline.speak("กำลังตรวจสอบสิ่งกีดขวาง")
             }
+            prompt.contains("มีอะไร") || prompt.contains("ช่วย") -> {
+                pendingPrompt = "อธิบายสภาพแวดล้อมรอบตัวในภาพโดยละเอียด"
+                _serviceStatus.value = "คำสั่ง: กำลังวิเคราะห์สภาพแวดล้อม..."
+                hapticManager.vibrateGeneralInfo()
+                audioPipeline.speak("กำลังวิเคราะห์สภาพแวดล้อม")
+            }
+            prompt.contains("อันตราย") -> {
+                pendingPrompt = "มีสิ่งอันตรายในภาพหรือไม่"
+                _serviceStatus.value = "คำสั่ง: กำลังตรวจสอบความปลอดภัย..."
+                hapticManager.vibrateWarning()
+                audioPipeline.speak("กำลังตรวจสอบความปลอดภัย")
+            }
         }
     }
 
@@ -144,11 +172,19 @@ class AssistiveService : Service() {
 
         serviceScope.launch {
             val fullResponse = StringBuilder()
-            
+            val startTime = System.currentTimeMillis()
+
             inferenceEngine.analyzeImageStream(bitmap, prompt).collect { token ->
                 fullResponse.append(token)
                 _inferenceOutput.value = fullResponse.toString()
             }
+
+            val latencyMs = System.currentTimeMillis() - startTime
+            val tokenCount = fullResponse.split(" ").size
+            performanceMonitor.recordInference(latencyMs, tokenCount)
+            performanceMonitor.refreshMemoryUsage()
+            performanceMonitor.refreshTemperature()
+            performanceMonitor.refreshBatteryDrain()
 
             val finalOutput = fullResponse.toString()
             val validatedOutput = if (prompt.contains("อ่าน")) {
@@ -158,8 +194,8 @@ class AssistiveService : Service() {
             }
 
             _inferenceOutput.value = validatedOutput
-            _serviceStatus.value = "ระบบพร้อมทำงาน"
-            
+            _serviceStatus.value = "ระบบพร้อมทำงาน (${latencyMs}ms)"
+
             // Trigger Haptic Feedback based on the VLM output severity
             triggerResponseHaptics(validatedOutput)
 
@@ -220,6 +256,25 @@ class AssistiveService : Service() {
             )
         } else {
             startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    /**
+     * โหลดโมเดลใหม่ทั้งหมดหลังดาวน์โหลดสำเร็จ (ไม่ต้อง restart แอป)
+     */
+    fun reinitializePipelines() {
+        serviceScope.launch {
+            _serviceStatus.value = "กำลังโหลดโมเดลที่ดาวน์โหลดมา..."
+            inferenceEngine.reinitialize()
+            audioPipeline.reinitializeRecognizer()
+            val isVlmReal = !inferenceEngine.isMockMode()
+            val isAsrReal = audioPipeline.isAsrReady()
+            performanceMonitor.updateVlmMode(isVlmReal)
+            performanceMonitor.updateAsrMode(isAsrReal)
+            val modeLabel = if (isVlmReal && isAsrReal) "Real Mode ✅" else "Partial Mode"
+            _serviceStatus.value = "โหลดสำเร็จ ($modeLabel)"
+            hapticManager.vibrateGeneralInfo()
+            audioPipeline.speak("โหลดโมเดลสำเร็จ ระบบพร้อมทำงาน")
         }
     }
 

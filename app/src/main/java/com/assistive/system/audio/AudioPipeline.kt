@@ -31,6 +31,7 @@ class AudioPipeline(
     private var isListening = false
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
+    private var keywordCallback: ((String) -> Unit)? = null
 
     // Audio Focus Request for Audio Ducking (API 26+)
     private var focusRequest: AudioFocusRequest? = null
@@ -40,10 +41,32 @@ class AudioPipeline(
         initializeRecognizer()
     }
 
-    private fun initializeRecognizer() {
-        val modelFile = File(modelDirPath, "encoder.onnx")
-        if (!modelFile.exists()) {
-            Log.w("AudioPipeline", "Sherpa-ONNX model files not found at $modelDirPath. ASR will run in simulation mode.")
+    // ===== Public API =====
+
+    /** ตรวจสอบว่า ASR โมเดลพร้อมใช้งานจริงหรือไม่ */
+    fun isAsrReady(): Boolean = recognizer != null
+
+    /** โหลด ASR model ใหม่หลังดาวน์โหลดสำเร็จ (ไม่ต้อง restart แอป) */
+    fun reinitializeRecognizer() {
+        val wasListening = isListening
+        if (wasListening) stopListening()
+        
+        recognizer?.release()
+        recognizer = null
+        initializeRecognizer()
+        
+        if (wasListening && keywordCallback != null) {
+            startListening(keywordCallback!!)
+        }
+        Log.i("AudioPipeline", "ASR Reinitialized. Ready=${isAsrReady()}")
+    }
+
+    // ===== Internal Setup =====
+
+    fun initializeRecognizer() {
+        val encoderFile = File(modelDirPath, "encoder.onnx")
+        if (!encoderFile.exists()) {
+            Log.w("AudioPipeline", "Sherpa-ONNX encoder not found at $modelDirPath. ASR in simulation mode.")
             return
         }
 
@@ -56,13 +79,13 @@ class AudioPipeline(
                 }
                 modelConfig.tokens = File(modelDirPath, "tokens.txt").absolutePath
                 modelConfig.numThreads = 4
-                modelConfig.provider = "cpu" // fallback to CPU for general compatibility
+                modelConfig.provider = "cpu"
                 featConfig.sampleRate = 16000
                 featConfig.featureDim = 80
                 enableEndpoint = true
             }
             recognizer = OnlineRecognizer(null, config)
-            Log.i("AudioPipeline", "Sherpa-ONNX Recognizer initialized successfully.")
+            Log.i("AudioPipeline", "Sherpa-ONNX Thai ASR initialized successfully.")
         } catch (e: Exception) {
             Log.e("AudioPipeline", "Failed to initialize Sherpa-ONNX: ${e.message}", e)
         }
@@ -72,7 +95,7 @@ class AudioPipeline(
         if (status == TextToSpeech.SUCCESS) {
             val result = tts?.setLanguage(Locale("th"))
             if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                Log.e("AudioPipeline", "Thai language is not supported for TTS. Falling back to English.")
+                Log.e("AudioPipeline", "Thai TTS not supported. Falling back to English.")
                 tts?.setLanguage(Locale.US)
             }
             isTtsReady = true
@@ -83,12 +106,13 @@ class AudioPipeline(
     }
 
     fun startListening(onKeywordDetected: (String) -> Unit) {
+        keywordCallback = onKeywordDetected
         if (isListening) return
         isListening = true
 
         val rec = recognizer
         if (rec == null) {
-            Log.i("AudioPipeline", "ASR Running in simulation mode. Tap screen to simulate commands.")
+            Log.i("AudioPipeline", "ASR Simulation Mode: Use buttons to trigger commands.")
             return
         }
 
@@ -110,20 +134,20 @@ class AudioPipeline(
                     if (readBytes > 0) {
                         val floatBuffer = FloatArray(readBytes) { i -> buffer[i] / 32768.0f }
                         stream.acceptWaveform(floatBuffer, sampleRate)
-                        
+
                         while (rec.isReady(stream)) {
                             rec.decode(stream)
                         }
-                        
+
                         val text = rec.getResult(stream).text.trim().lowercase()
                         if (text.isNotEmpty()) {
-                            Log.d("AudioPipeline", "Recognized speech: $text")
-                            // Check Thai keywords
-                            if (text.contains("อ่าน") || text.contains("ดู") || text.contains("หยุด") || text.contains("ข้างหน้า")) {
+                            Log.d("AudioPipeline", "ASR recognized: $text")
+                            // Thai keyword detection — ขยายตาม Proposal Section 5.2
+                            if (matchKeyword(text)) {
                                 onKeywordDetected(text)
                             }
                         }
-                        
+
                         if (rec.isEndpoint(stream)) {
                             rec.reset(stream)
                         }
@@ -132,23 +156,34 @@ class AudioPipeline(
                 }
                 stream.release()
             }
-            Log.i("AudioPipeline", "Microphone listening started.")
+            Log.i("AudioPipeline", "Microphone listening started (Real ASR mode).")
         } catch (e: SecurityException) {
-            Log.e("AudioPipeline", "Permission not granted to record audio: ${e.message}")
+            Log.e("AudioPipeline", "Audio permission not granted: ${e.message}")
             isListening = false
         } catch (e: Exception) {
-            Log.e("AudioPipeline", "Error during recording setup: ${e.message}", e)
+            Log.e("AudioPipeline", "Recording error: ${e.message}", e)
             isListening = false
         }
+    }
+
+    /**
+     * ตรวจสอบ keyword ภาษาไทยตาม Proposal Section 5.2
+     * รองรับ: อ่าน, ดู, หยุด, ข้างหน้า, สิ่งของ, บนโต๊ะ, ช่วย, กีดขวาง, อันตราย
+     */
+    private fun matchKeyword(text: String): Boolean {
+        val keywords = listOf(
+            "อ่าน", "ดู", "หยุด", "ข้างหน้า",
+            "สิ่งของ", "บนโต๊ะ", "ช่วย",
+            "กีดขวาง", "อันตราย", "มีอะไร"
+        )
+        return keywords.any { text.contains(it) }
     }
 
     fun stopListening() {
         isListening = false
         audioRecord?.apply {
             try {
-                if (state == AudioRecord.STATE_INITIALIZED) {
-                    stop()
-                }
+                if (state == AudioRecord.STATE_INITIALIZED) stop()
                 release()
             } catch (e: Exception) {
                 Log.e("AudioPipeline", "Error stopping AudioRecord: ${e.message}")
@@ -161,23 +196,20 @@ class AudioPipeline(
 
     fun speak(text: String, onComplete: () -> Unit = {}) {
         if (!isTtsReady) {
-            Log.w("AudioPipeline", "TTS not ready yet. Logging output: $text")
+            Log.w("AudioPipeline", "TTS not ready yet. Text: $text")
             onComplete()
             return
         }
 
-        // Apply Audio Ducking
         requestAudioFocusForDucking()
 
         val utteranceId = UUID.randomUUID().toString()
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {}
-
             override fun onDone(utteranceId: String?) {
                 abandonAudioFocus()
                 onComplete()
             }
-
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) {
                 abandonAudioFocus()
@@ -203,11 +235,7 @@ class AudioPipeline(
             focusRequest?.let { audioManager.requestAudioFocus(it) }
         } else {
             @Suppress("DEPRECATION")
-            audioManager.requestAudioFocus(
-                null,
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
-            )
+            audioManager.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
         }
     }
 
