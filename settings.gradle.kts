@@ -10,6 +10,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven { url = java.net.URI("https://k2-fsa.github.io/sherpa/onnx/android/maven") }
     }
 }
 
