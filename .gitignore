@@ -1,0 +1,23 @@
+# Exclude Project Proposal (as requested)
+ProjectProposal.md
+
+# Large Model Binary Weights
+*.litertlm
+*.onnx
+*.bin
+*.tflite
+/app/src/main/assets/sherpa-onnx-thai/
+/app/src/main/assets/gemma_vlm.litertlm
+
+# Gradle files
+.gradle/
+build/
+/app/build/
+
+# Android Studio / IntelliJ files
+.idea/
+*.iml
+.DS_Store
+
+# Local configuration files
+local.properties
