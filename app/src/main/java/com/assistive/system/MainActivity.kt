@@ -171,7 +171,6 @@ class MainActivity : ComponentActivity() {
                     .fillMaxWidth()
                     .padding(vertical = 12.dp)
             )
-
             // Camera Viewport / Layout
             Box(
                 modifier = Modifier
@@ -193,7 +192,11 @@ class MainActivity : ComponentActivity() {
                             }
                             
                             // Define Vision Pipeline
-                            visionPipeline = VisionPipeline(ctx, lifecycleOwner) { bitmap ->
+                            visionPipeline = VisionPipeline(
+                                context = ctx,
+                                lifecycleOwner = lifecycleOwner,
+                                isFrameRequested = { assistiveService?.hasPendingPrompt() == true }
+                            ) { bitmap ->
                                 assistiveService?.onCameraFrameAvailable(bitmap)
                             }
 
@@ -342,21 +345,21 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Button(
-                        onClick = { assistiveService?.audioPipeline?.speak("อ่าน") },
+                        onClick = { assistiveService?.handleVoiceCommand("อ่าน") },
                         colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
                         modifier = Modifier.weight(1f).padding(end = 4.dp)
                     ) {
                         Text("อ่านข้อความ", fontSize = 11.sp)
                     }
                     Button(
-                        onClick = { assistiveService?.audioPipeline?.speak("ดู") },
+                        onClick = { assistiveService?.handleVoiceCommand("ดู") },
                         colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
                         modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
                     ) {
                         Text("ระบุสิ่งของ", fontSize = 11.sp)
                     }
                     Button(
-                        onClick = { assistiveService?.audioPipeline?.speak("ข้างหน้า") },
+                        onClick = { assistiveService?.handleVoiceCommand("ข้างหน้า") },
                         colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
                         modifier = Modifier.weight(1f).padding(start = 4.dp)
                     ) {
