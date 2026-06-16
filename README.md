@@ -1,228 +1,410 @@
-# Assistive System for the Visually Impaired (ระบบช่วยเหลือผู้บกพร่องทางการมองเห็น)
+<div align="center">
 
-ระบบช่วยเหลือผู้บกพร่องทางการมองเห็น (Blind and Low Vision — BLV) ที่ทำงานแบบออฟไลน์เต็มรูปแบบ (Fully Offline) บนอุปกรณ์พกพา โดยใช้แบบจำลองภาษาพหุโหมด Gemma 4 2B (Vision-Language Model) ทำงานร่วมกับระบบถอดความหมายเสียงภาษาไทยออฟไลน์ Sherpa-ONNX และระบบแจ้งเตือนด้วยการสั่นสะเทือนแบบปรับระดับ (Haptic Feedback) เพื่อช่วยยกระดับความปลอดภัยและความเป็นส่วนตัวสูงสุดในการดำเนินชีวิตประจำวัน
+<img src="https://img.shields.io/badge/Platform-Android%208.0%2B-brightgreen?style=for-the-badge&logo=android&logoColor=white" />
+<img src="https://img.shields.io/badge/Language-Kotlin-purple?style=for-the-badge&logo=kotlin&logoColor=white" />
+<img src="https://img.shields.io/badge/AI%20Model-Gemma%204%202B%20VLM-blue?style=for-the-badge&logo=google&logoColor=white" />
+<img src="https://img.shields.io/badge/Inference-LiteRT--LM%20%7C%20Vulkan-orange?style=for-the-badge" />
+<img src="https://img.shields.io/badge/Mode-100%25%20Offline-red?style=for-the-badge&logo=lock&logoColor=white" />
+<img src="https://img.shields.io/badge/License-Research%20%2F%20Academic-lightgrey?style=for-the-badge" />
+
+<br/><br/>
+
+# 🦯 Assistive Offline AI
+### ระบบช่วยเหลือผู้บกพร่องทางการมองเห็น — ทำงานออฟไลน์เต็มรูปแบบ
+
+*A fully offline, privacy-first AI assistant for the Blind and Low Vision (BLV) community,*
+*powered by on-device multimodal AI — no internet, no cloud, no compromise.*
+
+<br/>
+
+[📖 Project Proposal](./ProjectProposal.md) · [🚀 Quick Start](#-getting-started) · [🏗️ Architecture](#️-architecture-overview) · [🧪 Testing](#-testing) · [🔧 Troubleshooting](#-troubleshooting)
+
+</div>
+
+---
+
+## 🌟 Overview
+
+**Assistive Offline AI** is an Android application built for the Thai Blind and Low Vision (BLV) community that delivers real-time, AI-powered scene understanding — **entirely on-device**. No data ever leaves the phone.
+
+The system combines three core technologies into a seamless assistive pipeline:
+
+| Component | Technology | Purpose |
+|---|---|---|
+| 👁️ **Vision** | Gemma 4 2B VLM via LiteRT-LM | อ่านสภาพแวดล้อม, ระบุสิ่งกีดขวาง, อ่าน OCR ภาษาไทย |
+| 🎙️ **Voice Commands** | Sherpa-ONNX (Zipformer Thai) | รับคำสั่งเสียงออฟไลน์ไม่ต้องต่ออินเทอร์เน็ต |
+| 📳 **Haptic Alerts** | Android Vibrator API (3 Levels) | แจ้งเตือนด้วยการสั่นสะเทือนตามระดับความอันตราย |
+
+> **Privacy First** — ข้อมูลภาพ เสียง และตำแหน่งของผู้ใช้ทุกอย่างประมวลผลในเครื่องเท่านั้น ไม่มีการส่งออกสู่ภายนอก
+
+---
+
+## ✨ Key Features
+
+- 🔍 **Real-time Object Detection** — ระบุสิ่งกีดขวาง วัตถุ และบุคคลผ่านกล้องหลังแบบ real-time
+- 📖 **Thai OCR** — อ่านข้อความภาษาไทย-อังกฤษ (ป้าย, เมนู, ป้ายยา) ด้วยความแม่นยำสูง
+- 🧭 **Obstacle Awareness** — ตรวจจับอุปสรรคพร้อม IMU เพื่อลดการ inference ขณะผู้ใช้หยุดนิ่ง
+- 🔊 **Offline Thai TTS** — ตอบกลับด้วยเสียงภาษาไทยแม้ไม่มีอินเทอร์เน็ต
+- ⚡ **GPU Accelerated** — รันโมเดลบน Vulkan GPU ให้ผล inference ภายใต้ 3 วินาที
+- 🎛️ **Developer Panel** — แผงทดสอบในตัวสำหรับ simulate การทำงานทุก pipeline
+- 🔬 **LoRA Fine-Tuning** — สคริปต์ฝึกโมเดลเพิ่มเติมเฉพาะทางภาษาไทย (QLoRA 4-bit)
+- 🔒 **Simulation / Mock Mode** — แอปทำงานได้แม้ยังไม่มีไฟล์โมเดล AI จริง
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Platform**: Android Native (API Level 26+)
-- **Programming Language**: Kotlin & Jetpack Compose
-- **Camera Library**: Android Jetpack CameraX (ImageAnalysis API)
-- **On-Device VLM Runtime**: Google AI Edge LiteRT-LM (TensorFlow Lite successor)
-- **VLM Hardware Acceleration**: Vulkan Compute API (GPU acceleration)
-- **Offline ASR Framework**: Sherpa-ONNX (Zipformer Thai Model)
-- **TTS Engine**: Android System TextToSpeech (Thai voice configuration)
-- **Sensors Integration**: IMU (Linear Acceleration & Gyroscope) for movement checking
-- **LoRA Fine-Tuning**: PyTorch, Hugging Face Transformers & PEFT (QLoRA 4-bit)
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     ASSISTIVE OFFLINE AI                        │
+├────────────────────────┬────────────────────────────────────────┤
+│  📱 Platform           │  Android Native (API 26+, Kotlin)      │
+│  🖼️ UI Framework       │  Jetpack Compose                       │
+│  📷 Camera             │  Android Jetpack CameraX               │
+│  🤖 VLM Runtime        │  Google AI Edge LiteRT-LM              │
+│  ⚡ GPU Backend        │  Vulkan Compute API                    │
+│  🎙️ Offline ASR        │  Sherpa-ONNX (Zipformer Thai)          │
+│  🔊 TTS Engine         │  Android System TextToSpeech (Thai)    │
+│  📡 IMU Sensors        │  Linear Acceleration + Gyroscope       │
+│  🧠 Fine-Tuning        │  PyTorch + HuggingFace PEFT (QLoRA)    │
+└────────────────────────┴────────────────────────────────────────┘
+```
 
 ---
 
-## 📋 Prerequisites (ข้อกำหนดเบื้องต้นสำหรับการพัฒนา)
+## 📋 Prerequisites
 
-- **OS**: Windows / macOS / Linux
-- **Development Tool**: Android Studio (Koala 2024.1.1 or higher recommended)
-- **Java Development Kit (JDK)**: JDK 17
-- **Gradle Version**: 8.3+
-- **Android Target Device**: สมาร์ทโฟน Android ที่มีคุณสมบัติ:
-  - หน่วยความจำ RAM ขั้นต่ำ **8 GB**
-  - รองรับ GPU Compute API (**Vulkan**)
-  - ติดตั้ง Android 8.0 (API Level 26) ขึ้นไป (แนะนำ Android 14+ / API Level 34)
+### Development Machine
+| Requirement | Minimum | Recommended |
+|---|---|---|
+| OS | Windows / macOS / Linux | Any |
+| IDE | Android Studio Koala 2024.1.1+ | Latest Stable |
+| JDK | JDK 17 | JDK 17 |
+| Gradle | 8.3+ | 8.3+ |
+
+### Target Android Device
+| Requirement | Specification |
+|---|---|
+| Android Version | 8.0 (API 26+) minimum · **Android 14+ (API 34) recommended** |
+| RAM | **8 GB minimum** (for Gemma 4 2B model) |
+| GPU | Must support **Vulkan Compute API** |
+| Storage | ~3 GB free (for model files) |
 
 ---
 
-## 🚀 Getting Started (เริ่มต้นติดตั้งและใช้งาน)
+## 🚀 Getting Started
 
-### 1. โคลนคลังเก็บโค้ด (Clone Project)
+### Step 1 — Clone the Repository
 
 ```bash
-git clone https://github.com/user/assistive-offline-ai.git
+git clone https://github.com/Bigzzz0/assistive-offline-ai.git
 cd assistive-offline-ai
 ```
 
-### 2. เปิดโครงการใน Android Studio
+### Step 2 — Open in Android Studio
 
 1. เปิด **Android Studio**
-2. เลือก **Open** และชี้ไปที่โฟลเดอร์หลักของโครงการ `c:\Users\User\Downloads\Assistive System`
-3. รอให้ Gradle โหลดและซิงก์ส่วนประกอบต่างๆ (Gradle Sync) จนเสร็จสิ้น
+2. เลือก **File → Open** แล้วชี้ไปที่โฟลเดอร์ที่โคลนมา
+3. รอให้ **Gradle Sync** ทำงานเสร็จสมบูรณ์ (อาจใช้เวลา 2–5 นาทีครั้งแรก)
 
-### 3. การเตรียมไฟล์โมเดลปัญญาประดิษฐ์ (Model Files Preparation)
+### Step 3 — Prepare AI Model Files
 
-เนื่องจากตัวโมเดลมีขนาดใหญ่ (~2 GB) จึงต้องโอนย้ายเข้าไปที่โฟลเดอร์ของแอปบนเครื่องทดสอบแยกต่างหาก:
+เนื่องจากไฟล์โมเดลมีขนาดใหญ่ (~2 GB+) ต้องโอนย้ายเข้าเครื่องทดสอบแยกต่างหาก:
 
-#### ก. โมเดล VLM (Gemma 4 2B)
-
-- เตรียมไฟล์น้ำหนักโมเดล Gemma VLM ในฟอร์แมต LiteRT (`gemma_vlm.litertlm`)
-- ส่งไฟล์เข้าไปยังไดเรกทอรีของแอปโดยเปิด Terminal และรันคำสั่ง:
-
-  ```bash
-  adb push gemma_vlm.litertlm /data/user/0/com.assistive.system/files/gemma_vlm.litertlm
-  ```
-
-#### ข. โมเดลเสียง (Sherpa-ONNX Thai ASR)
-
-- ดาวน์โหลดโมเดลภาษาไทยถอดเสียงออฟไลน์ (Zipformer)
-- สร้างโฟลเดอร์ปลายทางและส่งไฟล์เข้ามือถือ:
-
-  ```bash
-  adb shell mkdir -p /data/user/0/com.assistive.system/files/sherpa-onnx-thai
-  adb push encoder.onnx /data/user/0/com.assistive.system/files/sherpa-onnx-thai/
-  adb push decoder.onnx /data/user/0/com.assistive.system/files/sherpa-onnx-thai/
-  adb push joiner.onnx /data/user/0/com.assistive.system/files/sherpa-onnx-thai/
-  adb push tokens.txt /data/user/0/com.assistive.system/files/sherpa-onnx-thai/
-  ```
-
-> [!TIP]
-> **ระบบจำลอง (Simulation Mode)**: หากไม่มีไฟล์โมเดลจริงในเครื่อง แอปจะทำงานบน **Mock Mode** อัตโนมัติ เพื่อให้ผู้พัฒนาสามารถกดทดสอบปุ่มจำลองการทำงานของ TTS, UI, และระดับความสั่น (Haptics) ได้ทันทีโดยไม่เกิดอาการแอปค้างหรือเด้งหลุด
-
----
-
-## 🏗️ Architecture Overview (ภาพรวมสถาปัตยกรรมระบบ)
-
-สถาปัตยกรรมของแอปทำงานร่วมกันในลักษณะ Reactive Pipeline ภายใต้บริการเบื้องหลัง (Foreground Service):
-
-```
-                       [ IMU Sensors ] ────┐
-                                           │
-  [ CameraX ] ──(Frames)──> [ VisionPipeline ] 
-                                   │
-                               (Trigger)
-                                   ▼
-  [ Mic Input ] ──(Audio)──> [ AudioPipeline (ASR) ] ──(Command)─┐
-                                                                 ▼
-[ User UI ] ─────────────> [ AssistiveService ] ───> [ InferenceEngine ]
-                                   │                       │
-                              (Vibrate/Speak)          (VLM GPU)
-                                   ▼                       │
-                       [ Haptics & TTS Outputs ] <─────────┘
-```
-
-### รายละเอียดโครงสร้างไดเรกทอรีหลัก (Directory Structure)
-
-```
-c:/Users/User/Downloads/Assistive System/
-├── gradle/
-│   └── libs.versions.toml             # แค็ตตาล็อกจัดการเวอร์ชันไลบรารี
-├── app/
-│   ├── build.gradle.kts               # การตั้งค่าโมดูลและการระบุ Dependency ของแอป
-│   └── src/
-│       ├── main/
-│       │   ├── AndroidManifest.xml    # การขอสิทธิ์ฮาร์ดแวร์และการลงทะเบียน Service
-│       │   └── java/com/assistive/system/
-│       │       ├── AssistiveApp.kt    # จุดเริ่มต้น Initialization โกลบอล
-│       │       ├── MainActivity.kt    # ส่วนติดต่อผู้ใช้หลัก (Compose UI + Dev Panel)
-│       │       ├── audio/
-│       │       │   └── AudioPipeline.kt # ควบคุมระบบเสียงพูดและประมวลผลคำสั่งออฟไลน์
-│       │       ├── vision/
-│       │       │   └── VisionPipeline.kt # จัดการเฟรมกล้อง, จับการขยับตัวเครื่อง และตรวจจับการเปลี่ยนภาพ
-│       │       ├── ai/
-│       │       │   ├── InferenceEngine.kt # ตัวรันโมเดลภาษา LiteRT-LM บน GPU (Vulkan)
-│       │       │   └── OcrPostValidator.kt # รหัสตรวจสอบความถูกต้องของข้อความ OCR ไทยด้วย Regex
-│       │       ├── haptic/
-│       │       │   └── HapticManager.kt # โปรแกรมสั่นจำแนกตามระดับความอันตราย (Level 1/2/3)
-│       │       └── service/
-│       │           └── AssistiveService.kt # บริการเบื้องหลัง Foreground Service ควบคุมการไหลข้อมูล
-│       └── test/
-│           └── java/com/assistive/system/
-│               └── AssistiveSystemUnitTest.kt # ชุดทดสอบ Unit Test อัลกอริทึม
-└── scripts/
-    └── lora_training.py               # สคริปต์ Python ฝึก LoRA Fine-tuning บนคลาวด์/เซิร์ฟเวอร์
-```
-
----
-
-## 📝 Configuration & Environment Variables
-
-ค่ากำหนดระบบในตัวแอปถูกกำหนดไว้ใน `gradle.properties` และสิทธิ์ระดับเครื่องในแอปถูกประกาศไว้ใน `AndroidManifest.xml` ซึ่งมีรายละเอียดความต้องการการเข้าถึงดังนี้:
-
-| Permission | Purpose |
-| ---------- | ------- |
-| `android.permission.CAMERA` | สำหรับบันทึกเฟรมภาพมาให้โมเดล VLM ประมวลผล |
-| `android.permission.RECORD_AUDIO` | สำหรับการฟังคำสั่งเสียง (ASR) ออฟไลน์แบบเรียลไทม์ |
-| `android.permission.VIBRATE` | สำหรับส่งสัญญาณ Haptic Feedback แจ้งเตือนคนตาบอด |
-| `android.permission.FOREGROUND_SERVICE` | สำหรับคงสภาพการประมวลผลแม้ปิดหน้าจอมือถือ |
-
----
-
-## 🧪 Testing (วิธีการทดสอบ)
-
-### 1. การรันรหัสทดสอบหน่วย (Automated Unit Tests)
-
-โครงการนี้มี Unit Test สำหรับตรวจสอบการถอดรูปแบบเสียงจำลอง การตรวจสอบความต่างพิกเซลของรูป และการตรวจสอบผล OCR โทรศัพท์/ไปรษณีย์ไทย รันคำสั่งนี้บน IDE Terminal:
+#### 🤖 VLM Model — Gemma 4 2B
 
 ```bash
-# สำหรับ Windows PowerShell
-./gradlew testDebugUnitTest
+adb push gemma_vlm.litertlm \
+  /data/user/0/com.assistive.system/files/gemma_vlm.litertlm
+```
 
-# สำหรับ Linux/macOS
+#### 🎙️ ASR Model — Sherpa-ONNX Thai
+
+```bash
+# สร้างโฟลเดอร์ปลายทาง
+adb shell mkdir -p /data/user/0/com.assistive.system/files/sherpa-onnx-thai
+
+# โอนย้ายไฟล์โมเดลทั้งหมด
+adb push encoder.onnx  /data/user/0/com.assistive.system/files/sherpa-onnx-thai/
+adb push decoder.onnx  /data/user/0/com.assistive.system/files/sherpa-onnx-thai/
+adb push joiner.onnx   /data/user/0/com.assistive.system/files/sherpa-onnx-thai/
+adb push tokens.txt    /data/user/0/com.assistive.system/files/sherpa-onnx-thai/
+```
+
+> [!TIP]
+> **ไม่มีไฟล์โมเดล?** ไม่เป็นไร — แอปมี **Mock Mode** ในตัว ที่จำลองการทำงานทุก pipeline ให้ทดสอบ UI, TTS, และ Haptics ได้ทันทีโดยไม่แอปค้างหรือ crash
+
+### Step 4 — Build & Run
+
+```bash
+# สั่ง build และรันบนเครื่องที่เชื่อมต่อ
+./gradlew installDebug
+```
+
+หรือกดปุ่ม **▶ Run** ใน Android Studio ได้เลย
+
+---
+
+## 🏗️ Architecture Overview
+
+ระบบทำงานเป็น Reactive Pipeline ภายใต้ Foreground Service เพื่อให้ทำงานต่อเนื่องแม้ปิดหน้าจอ:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        INPUT LAYER                              │
+│                                                                 │
+│  [ CameraX Frames ]    [ Microphone ]    [ IMU Sensors ]        │
+└──────────┬─────────────────┬─────────────────┬─────────────────┘
+           │                 │                 │
+           ▼                 ▼                 │
+┌─────────────────┐  ┌──────────────────┐     │
+│ VisionPipeline  │  │  AudioPipeline   │     │
+│                 │  │  (Sherpa-ONNX    │     │
+│ • Change Detect │  │   Thai ASR)      │     │
+│ • Frame Throttle│  │ • Voice Command  │     │
+│ • IMU Gating ◀──┼──┼──────────────────┼─────┘
+└────────┬────────┘  └────────┬─────────┘
+         │                   │
+         └─────────┬─────────┘
+                   │  (Trigger + Command)
+                   ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    AssistiveService                             │
+│              (Foreground Service Orchestrator)                  │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+                           ▼
+              ┌────────────────────────┐
+              │    InferenceEngine     │
+              │   Gemma 4 2B VLM       │
+              │   LiteRT-LM | Vulkan   │
+              └────────────┬───────────┘
+                           │
+           ┌───────────────┴───────────────┐
+           ▼                               ▼
+  ┌─────────────────┐            ┌──────────────────┐
+  │   TTS Output    │            │  HapticManager   │
+  │  (Thai Voice)   │            │  Level 1 / 2 / 3 │
+  └─────────────────┘            └──────────────────┘
+```
+
+### Haptic Alert Levels
+
+| Level | Pattern | Trigger Condition |
+|---|---|---|
+| 🟢 **Level 1** | สั่นสั้น 1 ครั้ง | ข้อมูลทั่วไป, OCR, คำตอบปกติ |
+| 🟡 **Level 2** | สั่น 2 ระลอก | พบวัตถุใกล้, จุดที่ควรระวัง |
+| 🔴 **Level 3** | สั่นยาวต่อเนื่อง | อันตรายทันที, สิ่งกีดขวางหน้าทาง |
+
+---
+
+## 📁 Project Structure
+
+```
+assistive-offline-ai/
+│
+├── 📄 build.gradle.kts              # Root Gradle build config
+├── 📄 settings.gradle.kts           # Module configuration
+├── 📄 gradle.properties             # Build JVM flags & AndroidX
+│
+├── 📂 gradle/
+│   └── libs.versions.toml           # Version catalog (deps & plugins)
+│
+├── 📂 app/
+│   ├── 📄 build.gradle.kts          # App module dependencies & build rules
+│   └── 📂 src/main/
+│       ├── 📄 AndroidManifest.xml   # Permissions & Foreground Service declaration
+│       └── 📂 java/com/assistive/system/
+│           │
+│           ├── 🔷 AssistiveApp.kt           # Global Application init
+│           ├── 🔷 MainActivity.kt           # Main UI (Compose) + Dev Panel
+│           │
+│           ├── 📂 audio/
+│           │   └── 🔷 AudioPipeline.kt      # Sherpa-ONNX ASR + voice command parsing
+│           │
+│           ├── 📂 vision/
+│           │   └── 🔷 VisionPipeline.kt     # CameraX frames, IMU gating, change detection
+│           │
+│           ├── 📂 ai/
+│           │   ├── 🔷 InferenceEngine.kt    # LiteRT-LM VLM runner (GPU/Vulkan)
+│           │   └── 🔷 OcrPostValidator.kt   # Thai OCR regex post-processing
+│           │
+│           ├── 📂 haptic/
+│           │   └── 🔷 HapticManager.kt      # 3-level haptic feedback controller
+│           │
+│           └── 📂 service/
+│               └── 🔷 AssistiveService.kt   # Foreground Service — pipeline orchestrator
+│
+└── 📂 scripts/
+    └── 🐍 lora_training.py          # Python LoRA fine-tuning script (QLoRA 4-bit)
+```
+
+---
+
+## ⚙️ App Permissions
+
+| Permission | ความจำเป็น |
+|---|---|
+| `CAMERA` | บันทึกเฟรมภาพให้โมเดล VLM ประมวลผลแบบ real-time |
+| `RECORD_AUDIO` | รับคำสั่งเสียงผ่าน Sherpa-ONNX ASR ออฟไลน์ |
+| `VIBRATE` | ส่งสัญญาณ Haptic Feedback 3 ระดับ |
+| `FOREGROUND_SERVICE` | ให้ระบบทำงานต่อเนื่องเมื่อปิดหน้าจอมือถือ |
+| `POST_NOTIFICATIONS` | แสดงการแจ้งเตือน Foreground Service (Android 13+) |
+
+---
+
+## 🧪 Testing
+
+### Automated Unit Tests
+
+โครงการมี Unit Test ครอบคลุม: ตรรกะ IMU Gating, Pixel Diff Change Detection, OCR Regex Validator
+
+```bash
+# Windows PowerShell / macOS / Linux
 ./gradlew testDebugUnitTest
 ```
 
-### 2. การทดสอบแบบแมนนวลผ่าน Developer Panel
+### Manual Testing via Developer Panel
 
-ในหน้าจอ `MainActivity` คุณสามารถสลับหน้าจอการตรวจสอบได้โดย:
+เปิดแผงผู้พัฒนาในแอป: กดปุ่ม **"แสดงแผงผู้พัฒนา"** ใน `MainActivity`
 
-- กดปุ่ม **"แสดงแผงผู้พัฒนา (Show Developer Panel)"**
-- จะมีเมนูสำหรับจำลองคำสั่งเสียง:
-  - **อ่านข้อความ** (Simulates OCR)
-  - **ระบุสิ่งของ** (Simulates Object Detection)
-  - **เช็คทางเดิน** (Simulates Obstacle Awareness)
-- เมนูสำหรับยิงสัญญานทดสอบการสั่น:
-  - **Level 1** (สั่นสั้นหนึ่งครั้งสำหรับข้อความทั่วไป)
-  - **Level 2** (สั่นเตือนสองระลอกสำหรับจุดควรระวัง)
-  - **Level 3** (สั่นเป็นจังหวะยาวต่อเนื่องเมื่อตรวจพบอันตราย)
-- แสดงค่า **JVM Memory Usage** เพื่อดูอัตราการใช้แรมของเครื่องแบบเรียลไทม์
+**Voice Command Simulation:**
+- 🔘 **อ่านข้อความ** — จำลอง OCR pipeline
+- 🔘 **ระบุสิ่งของ** — จำลอง Object Detection
+- 🔘 **เช็คทางเดิน** — จำลอง Obstacle Awareness
 
----
+**Haptic Testing:**
+- 📳 **Level 1** · **Level 2** · **Level 3** — ทดสอบรูปแบบการสั่นทั้ง 3 ระดับ
 
-## ⚡ LoRA Fine-Tuning Guide (การฝึกโมเดลภาษา)
-
-สคริปต์ [lora_training.py](file:///c:/Users/User/Downloads/Assistive%20System/scripts/lora_training.py) ใช้สำหรับการฝึกฝนโมเดลภาษาบนเซิร์ฟเวอร์ GPU เช่น Google Colab หรือเครื่องเวิร์กสเตชันการ์ดจอแยก
-
-### การรันสคริปต์ฝึกโมเดล
-
-1. เตรียมไฟล์ชุดข้อมูลรูปภาพและไฟล์คำถาม-คำตอบในชื่อ `dataset.json` ตัวอย่างโครงสร้างไฟล์:
-
-   ```json
-   [
-     {
-       "image": "images/test1.jpg",
-       "instruction": "ข้างหน้ามีอะไรขวางทางไหม",
-       "response": "เก้าอี้พลาสติกสีฟ้าขวางอยู่ข้างหน้า (ความมั่นใจ: สูง)"
-     }
-   ]
-   ```
-
-2. ติดตั้งโมดูลเสริมบน Python:
-
-   ```bash
-   pip install torch transformers peft bitsandbytes pillow
-   ```
-
-3. สั่งรันฝึกฝน LoRA Adapter:
-
-   ```bash
-   python scripts/lora_training.py --dataset_path path/to/dataset.json --output_dir ./gemma_thai_lora
-   ```
-
-4. แปลงไฟล์ไปใช้งานในแอปพลิเคชันโดยศึกษาแนวทางที่ระบุไว้ที่ส่วนท้ายของสคริปต์ [lora_training.py](file:///c:/Users/User/Downloads/Assistive%20System/scripts/lora_training.py)
+**System Monitoring:**
+- 📊 แสดง **JVM Memory Usage** แบบ real-time
 
 ---
 
-## 🛑 Troubleshooting (การแก้ไขปัญหาเบื้องต้น)
+## 🔬 LoRA Fine-Tuning Guide
 
-### 1. ปัญหา: แอปเด้งออกทันทีหลังเชื่อมต่อกล้องหรือ VLM รัน
+สคริปต์ [`scripts/lora_training.py`](./scripts/lora_training.py) ใช้ฝึกโมเดล Gemma 4 2B ให้ตอบสนองภาษาไทยได้ดีขึ้นบน Google Colab / GPU Workstation
 
-- **สาเหตุ**: อาจเกิดจากการเรียกใช้ VLM Model บน GPU โดยที่ยังไม่ได้กำหนดค่า `visionBackend` ใน `EngineConfig` หรือไดรเวอร์ Vulkan ของมือถือรุ่นนั้นมีปัญหา
-- **การแก้ไข**: ตรวจเช็คว่ามีการตั้งค่า `.setBackend(Backend.GPU())` และ `.setVisionBackend(Backend.GPU())` แล้วใน [InferenceEngine.kt](file:///c:/Users/User/Downloads/Assistive%20System/app/src/main/java/com/assistive/system/ai/InferenceEngine.kt) หรือเปลี่ยนพารามิเตอร์กลับไปเป็น `Backend.CPU()` เพื่อความเสถียรบนอุปกรณ์ระดับล่าง
+### 1. เตรียมชุดข้อมูล (Dataset Format)
 
-### 2. ปัญหา: บิวด์โปรเจกต์ผ่านแล้วแต่เกิดปัญหาไฟล์ native duplicate
+```json
+[
+  {
+    "image": "images/scene_001.jpg",
+    "instruction": "ข้างหน้ามีอะไรขวางทางไหม",
+    "response": "มีเก้าอี้พลาสติกสีฟ้าขวางอยู่ข้างหน้า ระยะห่างประมาณ 1 เมตร (ความมั่นใจ: สูง)"
+  }
+]
+```
 
-- **สาเหตุ**: ไลบรารี LiteRT และ Sherpa-ONNX มีการดึงเอาไฟล์ JNI `libc++_shared.so` ซ้ำซ้อนกัน
-- **การแก้ไข**: ตรวจสอบว่าในไฟล์ [app/build.gradle.kts](file:///c:/Users/User/Downloads/Assistive%20System/app/build.gradle.kts) มีบล็อกคำสั่ง `packaging { jniLibs { pickFirsts += "**/libc++_shared.so" } }` เพื่อสั่งให้นำไฟล์แรกที่เจอไปแพ็กกิ้งแทนการสกัดข้อผิดพลาด
+### 2. ติดตั้ง Python Dependencies
+
+```bash
+pip install torch transformers peft bitsandbytes pillow
+```
+
+### 3. รัน Training Script
+
+```bash
+python scripts/lora_training.py \
+  --dataset_path path/to/dataset.json \
+  --output_dir ./gemma_thai_lora
+```
+
+### 4. โอนย้าย LoRA Adapter ไปยังแอป
+
+```bash
+# หลังฝึกเสร็จ โอน adapter เข้าเครื่อง Android
+adb push gemma_thai_lora/ \
+  /data/user/0/com.assistive.system/files/lora_adapter/
+```
 
 ---
 
-## 👥 ผู้พัฒนาและลิขสิทธิ์ (License)
+## 🔧 Troubleshooting
 
-โครงงานวิจัยชิ้นนี้จัดทำขึ้นเพื่อยกระดับคุณภาพชีวิตและอำนวยความสะดวกการใช้ชีวิตประจำวันของผู้บกพร่องทางการมองเห็นอย่างแท้จริง
+<details>
+<summary><b>❌ แอปเด้งออกหลังเชื่อมต่อกล้องหรือโหลด VLM</b></summary>
+
+**สาเหตุ:** Vulkan backend ไม่รองรับบนเครื่องนั้น หรือกำหนดค่า EngineConfig ไม่ครบถ้วน
+
+**การแก้ไข:** ใน [`InferenceEngine.kt`](./app/src/main/java/com/assistive/system/ai/InferenceEngine.kt) ตรวจสอบว่ามีการตั้งค่าทั้งสองบรรทัดนี้:
+```kotlin
+.setBackend(Backend.GPU())
+.setVisionBackend(Backend.GPU())
+```
+หากเครื่องไม่รองรับ Vulkan ให้เปลี่ยนเป็น `Backend.CPU()` ชั่วคราว
+
+</details>
+
+<details>
+<summary><b>❌ Build สำเร็จแต่เกิด duplicate native library error</b></summary>
+
+**สาเหตุ:** LiteRT-LM และ Sherpa-ONNX ดึงไฟล์ `libc++_shared.so` ซ้ำซ้อนกัน
+
+**การแก้ไข:** ตรวจสอบว่า [`app/build.gradle.kts`](./app/build.gradle.kts) มีบล็อกนี้:
+```kotlin
+packaging {
+    jniLibs {
+        pickFirsts += "**/libc++_shared.so"
+    }
+}
+```
+
+</details>
+
+<details>
+<summary><b>❌ Gradle Sync ล้มเหลว — ไม่พบ LiteRT-LM artifact</b></summary>
+
+**สาเหตุ:** Maven repository ของ Google AI Edge ต้องการการระบุในส่วน `dependencyResolutionManagement`
+
+**การแก้ไข:** ตรวจสอบ [`settings.gradle.kts`](./settings.gradle.kts) ว่ามี:
+```kotlin
+maven { url = uri("https://maven.google.com") }
+maven { url = uri("https://storage.googleapis.com/litertlm-releases/") }
+```
+
+</details>
+
+<details>
+<summary><b>❌ TTS ภาษาไทยไม่ได้ยินเสียง</b></summary>
+
+**สาเหตุ:** เครื่อง Android ไม่มีชุดข้อมูลเสียงภาษาไทย (Thai TTS Language Pack) ติดตั้ง
+
+**การแก้ไข:** ไปที่ **Settings → Accessibility → Text-to-Speech** แล้วดาวน์โหลด **ภาษาไทย (Thai)**
+
+</details>
+
+---
+
+## 🗺️ Roadmap
+
+- [x] Phase 1 — Android Project Setup & Gradle Configuration
+- [x] Phase 2 — VisionPipeline + IMU Sensor Gating
+- [x] Phase 3 — AudioPipeline (Sherpa-ONNX Thai ASR)
+- [x] Phase 4 — InferenceEngine (LiteRT-LM + Vulkan GPU)
+- [x] Phase 5 — HapticManager (3-Level Vibration)
+- [x] Phase 6 — AssistiveService Foreground Orchestration
+- [x] Phase 7 — MainActivity Compose UI + Developer Panel
+- [x] Phase 8 — LoRA Fine-Tuning Script (QLoRA 4-bit)
+- [ ] Phase 9 — LoRA Adapter loading in LiteRT-LM runtime
+- [ ] Phase 10 — End-to-end field testing with BLV users
+- [ ] Phase 11 — iOS support evaluation (Swift / CoreML)
+
+---
+
+## 👥 About This Project
+
+โครงงานวิจัยชิ้นนี้จัดทำขึ้นเพื่อยกระดับคุณภาพชีวิตและอำนวยความสะดวกการใช้ชีวิตประจำวันของผู้บกพร่องทางการมองเห็น (BLV) ในประเทศไทยอย่างแท้จริง โดยใช้เทคโนโลยี AI สมัยใหม่ที่ประมวลผลทุกอย่างในเครื่อง เพื่อปกป้องความเป็นส่วนตัวสูงสุดและรองรับการใช้งานในพื้นที่ที่ไม่มีอินเทอร์เน็ต
+
+> *"Technology should empower everyone — including those who see the world differently."*
+
+---
+
+<div align="center">
+
+**Made with ❤️ for the Blind & Low Vision Community**
+
+[![GitHub](https://img.shields.io/badge/GitHub-Bigzzz0-181717?style=flat-square&logo=github)](https://github.com/Bigzzz0/assistive-offline-ai)
+
+</div>
