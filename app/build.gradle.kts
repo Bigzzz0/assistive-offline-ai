@@ -39,6 +39,7 @@ android {
     }
     kotlinOptions {
         jvmTarget = "1.8"
+        freeCompilerArgs = freeCompilerArgs + listOf("-Xskip-metadata-version-check")
     }
     buildFeatures {
         compose = true
