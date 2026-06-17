@@ -12,7 +12,8 @@ targets:
     deploymentTarget: "16.0"
     sources:
       - AssistiveApp
-    entitlements: AssistiveApp/AssistiveApp.entitlements
+    entitlements:
+      path: AssistiveApp/AssistiveApp.entitlements
     settings:
       INFOPLIST_FILE: AssistiveApp/Info.plist
       CODE_SIGN_IDENTITY: "-"
