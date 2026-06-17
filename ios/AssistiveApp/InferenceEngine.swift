@@ -7,18 +7,63 @@ import Combine
 class LogStore: ObservableObject {
     static let shared = LogStore()
     @Published var logs: [String] = []
+    private var logFileURL: URL?
+    
+    init() {
+        let fileManager = FileManager.default
+        let paths = fileManager.urls(for: .documentDirectory, in: .userDomainMask)
+        if let docDir = paths.first {
+            let url = docDir.appendingPathComponent("debug_log.txt")
+            self.logFileURL = url
+            loadPersistedLogs(from: url)
+        }
+    }
+    
+    private func loadPersistedLogs(from url: URL) {
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                let content = try String(contentsOf: url, encoding: .utf8)
+                let lines = content.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                DispatchQueue.main.async {
+                    self.logs = lines.map { "[PREV] \($0)" }
+                    self.log("--- New Session Started ---")
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.log("--- New Log File Created ---")
+                }
+            }
+        } catch {
+            print("Failed to load logs: \(error.localizedDescription)")
+        }
+    }
     
     func log(_ message: String) {
         print(message)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        let timeStr = formatter.string(from: Date())
+        let formattedMessage = "[\(timeStr)] \(message)"
+        
         DispatchQueue.main.async {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm:ss.SSS"
-            let timeStr = formatter.string(from: Date())
-            self.logs.append("[\(timeStr)] \(message)")
-            if self.logs.count > 100 {
+            self.logs.append(formattedMessage)
+            if self.logs.count > 150 {
                 self.logs.removeFirst()
             }
+            self.persistLogs()
         }
+    }
+    
+    private func persistLogs() {
+        guard let url = logFileURL else { return }
+        let rawLogs = self.logs.map { line -> String in
+            if line.hasPrefix("[PREV] ") {
+                return String(line.dropFirst(7))
+            }
+            return line
+        }
+        let content = rawLogs.joined(separator: "\n")
+        try? content.write(to: url, atomically: true, encoding: .utf8)
     }
 }
 
@@ -72,9 +117,9 @@ class InferenceEngine {
         if !isMockMode, let url = modelURL {
             LogStore.shared.log("[InferenceEngine] Gemma 4 model found at: \(url.path). Configuring LiteRT-LM Engine...")
             
-            // Enable experimental flags and set visual token budget (reduces image prefill memory footprint by ~4x)
+            // Enable experimental flags and set visual token budget (reduces image prefill memory footprint by ~8x)
             ExperimentalFlags.optIntoExperimentalAPIs()
-            ExperimentalFlags.visualTokenBudget = Int32(280)
+            ExperimentalFlags.visualTokenBudget = Int32(140)
             
             Task {
                 do {
@@ -83,7 +128,7 @@ class InferenceEngine {
                         modelPath: url.path,
                         backend: .gpu,
                         visionBackend: .gpu,
-                        maxNumTokens: 1024, // Restrict KV cache memory footprint to fit in iOS RAM limit
+                        maxNumTokens: 512, // Further restrict KV cache size to allow GPU creation success
                         cacheDir: FileManager.default.temporaryDirectory.path
                     )
                     let engineInstance = Engine(engineConfig: config)
@@ -103,7 +148,7 @@ class InferenceEngine {
                             modelPath: url.path,
                             backend: .cpu(),
                             visionBackend: .cpu(),
-                            maxNumTokens: 1024, // Restrict KV cache memory footprint to fit in iOS RAM limit
+                            maxNumTokens: 512, // Match maxNumTokens for CPU fallback
                             cacheDir: FileManager.default.temporaryDirectory.path
                         )
                         let engineInstance = Engine(engineConfig: config)
@@ -254,10 +299,12 @@ class InferenceEngine {
         
         // ── VLM modes (object/obstacle) ──
         if !isMockMode, let conversation = self.conversation {
+            LogStore.shared.log("[InferenceEngine] Starting VLM image analysis. Image size: \(jpegData.count) bytes. Prompt: \(promptText)")
             // Write JPEG to temporary file
             let tempFileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jpg")
             do {
                 try jpegData.write(to: tempFileURL)
+                LogStore.shared.log("[InferenceEngine] Written temp image file to: \(tempFileURL.path)")
             } catch {
                 LogStore.shared.log("[InferenceEngine] VLM temp write error: \(error.localizedDescription)")
                 runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
@@ -266,6 +313,7 @@ class InferenceEngine {
             
             Task.detached(priority: .userInitiated) {
                 do {
+                    LogStore.shared.log("[InferenceEngine] Detached background task started. Constructing Message payload...")
                     let prompt = "\(self.systemPrompt)\n\nคำสั่ง: \(promptText)"
                     let message = Message(contents: [
                         Content.imageFile(tempFileURL.path),
@@ -273,15 +321,21 @@ class InferenceEngine {
                     ])
                     
                     var accumulatedText = ""
+                    LogStore.shared.log("[InferenceEngine] Sending message payload and starting stream...")
                     
                     // sendMessageStream returns an AsyncThrowingStream of Message chunks
                     for try await chunk in conversation.sendMessageStream(message) {
                         let textChunk = chunk.toString
+                        if accumulatedText.isEmpty {
+                            LogStore.shared.log("[InferenceEngine] First VLM streamed token chunk received: \(textChunk)")
+                        }
                         accumulatedText += textChunk
                         DispatchQueue.main.async {
                             onToken(textChunk)
                         }
                     }
+                    
+                    LogStore.shared.log("[InferenceEngine] VLM stream completed. Total response size: \(accumulatedText.count) chars.")
                     
                     // Clean up temp file
                     try? FileManager.default.removeItem(at: tempFileURL)
