@@ -1,0 +1,28 @@
+name: AssistiveApp
+options:
+  bundleIdPrefix: com.assistive.system
+targets:
+  AssistiveApp:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - AssistiveApp
+    settings:
+      INFOPLIST_FILE: AssistiveApp/Info.plist
+      CODE_SIGN_IDENTITY: ""
+      CODE_SIGNING_REQUIRED: "NO"
+      CODE_SIGNING_ALLOWED: "NO"
+    dependencies:
+      - sdk: AVFoundation.framework
+      - sdk: AudioToolbox.framework
+      - sdk: CoreHaptics.framework
+      - package: LiteRT-LM
+      - package: sherpa-onnx
+packages:
+  LiteRT-LM:
+    url: https://github.com/google-ai-edge/LiteRT-LM
+    from: 0.13.0
+  sherpa-onnx:
+    url: https://github.com/k2-fsa/sherpa-onnx
+    from: 1.13.0

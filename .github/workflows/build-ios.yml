@@ -1,0 +1,56 @@
+name: Build iOS Application
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Generate and Build iOS App
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Xcode version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.4'
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode Project
+        run: |
+          cd ios
+          xcodegen generate
+
+      - name: Build iOS App (No Code Signing)
+        run: |
+          cd ios
+          xcodebuild -project AssistiveApp.xcodeproj \
+                     -scheme AssistiveApp \
+                     -configuration Debug \
+                     -sdk iphoneos \
+                     -derivedDataPath build \
+                     CODE_SIGN_IDENTITY="" \
+                     CODE_SIGNING_REQUIRED=NO \
+                     CODE_SIGNING_ALLOWED=NO \
+                     clean build
+
+      - name: Package IPA
+        run: |
+          cd ios
+          mkdir -p build/Payload
+          cp -r build/Build/Products/Debug-iphoneos/AssistiveApp.app build/Payload/
+          cd build
+          zip -r AssistiveApp.ipa Payload
+
+      - name: Upload iOS Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AssistiveApp-iOS
+          path: ios/build/AssistiveApp.ipa
