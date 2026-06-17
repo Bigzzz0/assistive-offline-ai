@@ -123,11 +123,11 @@ class InferenceEngine {
             
             Task {
                 do {
-                    LogStore.shared.log("[InferenceEngine] Attempting GPU initialization with GPU visionBackend...")
+                    LogStore.shared.log("[InferenceEngine] Attempting GPU initialization with CPU visionBackend...")
                     let config = try EngineConfig(
                         modelPath: url.path,
                         backend: .gpu,
-                        visionBackend: .gpu,
+                        visionBackend: .cpu(), // CPU vision delegate is required for VLM model stability on iOS GPU backend
                         maxNumTokens: 512, // Further restrict KV cache size to allow GPU creation success
                         cacheDir: FileManager.default.temporaryDirectory.path
                     )
@@ -300,23 +300,13 @@ class InferenceEngine {
         // ── VLM modes (object/obstacle) ──
         if !isMockMode, let conversation = self.conversation {
             LogStore.shared.log("[InferenceEngine] Starting VLM image analysis. Image size: \(jpegData.count) bytes. Prompt: \(promptText)")
-            // Write JPEG to temporary file
-            let tempFileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jpg")
-            do {
-                try jpegData.write(to: tempFileURL)
-                LogStore.shared.log("[InferenceEngine] Written temp image file to: \(tempFileURL.path)")
-            } catch {
-                LogStore.shared.log("[InferenceEngine] VLM temp write error: \(error.localizedDescription)")
-                runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
-                return
-            }
             
             Task.detached(priority: .userInitiated) {
                 do {
                     LogStore.shared.log("[InferenceEngine] Detached background task started. Constructing Message payload...")
                     let prompt = "\(self.systemPrompt)\n\nคำสั่ง: \(promptText)"
                     let message = Message(contents: [
-                        Content.imageFile(tempFileURL.path),
+                        Content.imageData(jpegData),
                         Content.text(prompt)
                     ])
                     
@@ -337,15 +327,11 @@ class InferenceEngine {
                     
                     LogStore.shared.log("[InferenceEngine] VLM stream completed. Total response size: \(accumulatedText.count) chars.")
                     
-                    // Clean up temp file
-                    try? FileManager.default.removeItem(at: tempFileURL)
-                    
                     DispatchQueue.main.async {
                         completion(accumulatedText)
                     }
                 } catch {
                     LogStore.shared.log("[InferenceEngine] Real VLM inference error: \(error.localizedDescription)")
-                    try? FileManager.default.removeItem(at: tempFileURL)
                     // Fallback to mock response if local model fails during execution
                     self.runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
                 }
