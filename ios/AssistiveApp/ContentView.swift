@@ -5,12 +5,18 @@ enum ActiveMode: String, CaseIterable {
     case read = "📖 อ่านหนังสือ (OCR)"
     case object = "👁️ หาวัตถุบนโต๊ะ"
     case obstacle = "🚧 ตรวจสิ่งกีดขวาง"
+    case pointAndSpeak = "👉 ชี้แล้วอ่าน"
+    case peopleDetection = "👤 เตือนระยะคน"
+    case roomPlan = "🪑 ค้นหาเก้าอี้และประตู"
     
     var command: String {
         switch self {
         case .read: return "อ่าน"
         case .object: return "ดู"
         case .obstacle: return "ข้างหน้า"
+        case .pointAndSpeak: return "ชี้"
+        case .peopleDetection: return "คน"
+        case .roomPlan: return "สแกนห้อง"
         }
     }
     
@@ -19,6 +25,9 @@ enum ActiveMode: String, CaseIterable {
         case .read: return "โหมดอ่านหนังสือ"
         case .object: return "โหมดหาวัตถุ"
         case .obstacle: return "โหมดตรวจจับสิ่งกีดขวาง"
+        case .pointAndSpeak: return "โหมดชี้แล้วอ่าน"
+        case .peopleDetection: return "โหมดเตือนระยะคน"
+        case .roomPlan: return "โหมดค้นหาเก้าอี้และประตู"
         }
     }
     
@@ -205,7 +214,7 @@ struct ContentView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("คำอธิบายภาพจากเอไอ: \(aiResultText.isEmpty ? "ยังไม่มีคำอธิบาย แตะที่หน้าจอเพื่อวิเคราะห์" : aiResultText)")
                 
-                // ---- Stacked Action Buttons ----
+// ---- Stacked Action Buttons ----
                 VStack(spacing: 12) {
                     Button(action: { triggerCommand("อ่าน") }) {
                         Text("📖 อ่านข้อความ (OCR)")
@@ -239,8 +248,46 @@ struct ContentView: View {
                             .cornerRadius(12)
                     }
                     .accessibilityLabel("ปุ่มตรวจสอบสิ่งกีดขวางทางเดินด้านหน้า")
+                    
+                    Button(action: {
+                        currentMode = .pointAndSpeak
+                    }) {
+                        Text("👉 ชี้นิ้วแล้วอ่าน (Point & Speak)")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 60)
+                            .background(Color.purple)
+                            .cornerRadius(12)
+                    }
+                    .accessibilityLabel("ปุ่มชี้นิ้วแล้วอ่านข้อความที่ปลายนิ้วสัมผัส")
+                    
+                    Button(action: {
+                        currentMode = .peopleDetection
+                    }) {
+                        Text("👤 เตือนระยะคน (People Alert)")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 60)
+                            .background(Color.pink)
+                            .cornerRadius(12)
+                    }
+                    .accessibilityLabel("ปุ่มเตือนระยะห่างคนรอบตัวด้วยเสียงและการสั่น")
+                    
+                    Button(action: {
+                        currentMode = .roomPlan
+                    }) {
+                        Text("🪑 ค้นหาเก้าอี้และประตู (LiDAR)")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 60)
+                            .background(Color.teal)
+                            .cornerRadius(12)
+                    }
+                    .accessibilityLabel("ปุ่มค้นหาเก้าอี้และประตูรอบตัวโดยใช้ไรดาร์สแกน")
                 }
-                
                 // ---- Dev Panel + Model Manager toggles ----
                 HStack(spacing: 8) {
                     Button(action: {
@@ -422,22 +469,43 @@ struct ContentView: View {
                 
                 // ---- Collapsible Debug Console Panel ----
                 VStack(spacing: 8) {
-                    Button(action: {
-                        withAnimation {
-                            showDebugConsole.toggle()
+                    HStack(spacing: 8) {
+                        Button(action: {
+                            withAnimation {
+                                showDebugConsole.toggle()
+                            }
+                        }) {
+                            HStack {
+                                Text("📋 Debug Console (\(logStore.logs.count) logs)")
+                                    .font(.system(size: 13, weight: .bold))
+                                Spacer()
+                                Image(systemName: showDebugConsole ? "chevron.down" : "chevron.up")
+                            }
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            .background(Color.cyan.opacity(0.1))
+                            .cornerRadius(6)
                         }
-                    }) {
-                        HStack {
-                            Text("📋 Debug Console (\(logStore.logs.count) logs)")
-                                .font(.system(size: 13, weight: .bold))
-                            Spacer()
-                            Image(systemName: showDebugConsole ? "chevron.down" : "chevron.up")
+                        
+                        Button(action: {
+                            let allLogs = logStore.logs.joined(separator: "\n")
+                            UIPasteboard.general.string = allLogs
+                            vibrateHaptic(level: 1)
+                            speakText("คัดลอกบันทึกสำเร็จ")
+                        }) {
+                            HStack {
+                                Image(systemName: "doc.on.doc")
+                                Text("ก๊อปปี้")
+                                    .font(.system(size: 13, weight: .bold))
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.cyan)
+                            .cornerRadius(6)
                         }
-                        .foregroundColor(.cyan)
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                        .background(Color.cyan.opacity(0.1))
-                        .cornerRadius(6)
+                        .accessibilityLabel("คัดลอกบันทึกทั้งหมด")
                     }
                     
                     if showDebugConsole {
@@ -497,6 +565,10 @@ struct ContentView: View {
             requestCameraPermission()
             isMockMode = InferenceEngine.shared.initialize() ? InferenceEngine.shared.isMock() : true
             statusText = "ระบบพร้อมทำงาน"
+            handleModeChange(to: currentMode)
+        }
+        .onChange(of: currentMode) { newMode in
+            handleModeChange(to: newMode)
         }
         .onChange(of: downloader.isComplete) { isComplete in
             if isComplete {
@@ -538,6 +610,11 @@ struct ContentView: View {
     // MARK: - Actions
     
     private func triggerCommand(_ command: String) {
+        if command == "ชี้" {
+            speakText("โหมดชี้แล้วอ่านกำลังทำงานอยู่ ยื่นนิ้วชี้ไปหน้ากล้องเพื่อสแกนอ่านข้อความ")
+            return
+        }
+        
         guard !isProcessing else { return }
         
         // If VLM mode is triggered, but model is still loading in the background
@@ -580,6 +657,41 @@ struct ContentView: View {
         }
     }
     
+    private func handleModeChange(to newMode: ActiveMode) {
+        VisionPipeline.shared.activeMode = newMode
+        
+        // Stop any running special sessions
+        ARDepthPipeline.shared.stopSession()
+        AudioPipeline.shared.stopTone()
+        #if canImport(RoomPlan)
+        RoomPlanManager.shared.stopSession()
+        #endif
+        
+        if newMode == .roomPlan {
+            VisionPipeline.shared.stopSession()
+            #if canImport(RoomPlan)
+            if DeviceCapabilities.supportsLiDAR() {
+                RoomPlanManager.shared.startSession()
+            } else {
+                speakText("อุปกรณ์นี้ไม่รองรับระบบไลดาร์ สลับเป็นโหมดจำลองสิ่งกีดขวาง")
+                aiResultText = "อุปกรณ์ไม่รองรับ LiDAR จะทำงานในโหมดจำลองสิ่งกีดขวางแบบออฟไลน์"
+            }
+            #else
+            speakText("ระบบปฏิบัติการนี้ไม่รองรับรูมแพลน สลับเป็นโหมดจำลองสิ่งกีดขวาง")
+            aiResultText = "ไม่รองรับ RoomPlan ในเวอร์ชันนี้ จะทำงานในโหมดจำลองสิ่งกีดขวางแบบออฟไลน์"
+            #endif
+        } else if newMode == .peopleDetection {
+            VisionPipeline.shared.stopSession()
+            ARDepthPipeline.shared.startSession()
+        } else {
+            if VisionPipeline.shared.session == nil || !VisionPipeline.shared.session!.isRunning {
+                VisionPipeline.shared.startSession()
+            }
+        }
+        
+        announceMode()
+    }
+
     private func announceMode() {
         vibrateHaptic(level: 1)
         speakText(currentMode.speech)

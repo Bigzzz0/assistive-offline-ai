@@ -7,18 +7,63 @@ import Combine
 class LogStore: ObservableObject {
     static let shared = LogStore()
     @Published var logs: [String] = []
+    private var logFileURL: URL?
+    
+    init() {
+        let fileManager = FileManager.default
+        let paths = fileManager.urls(for: .documentDirectory, in: .userDomainMask)
+        if let docDir = paths.first {
+            let url = docDir.appendingPathComponent("debug_log.txt")
+            self.logFileURL = url
+            loadPersistedLogs(from: url)
+        }
+    }
+    
+    private func loadPersistedLogs(from url: URL) {
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                let content = try String(contentsOf: url, encoding: .utf8)
+                let lines = content.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                DispatchQueue.main.async {
+                    self.logs = lines.map { "[PREV] \($0)" }
+                    self.log("--- New Session Started ---")
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.log("--- New Log File Created ---")
+                }
+            }
+        } catch {
+            print("Failed to load logs: \(error.localizedDescription)")
+        }
+    }
     
     func log(_ message: String) {
         print(message)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        let timeStr = formatter.string(from: Date())
+        let formattedMessage = "[\(timeStr)] \(message)"
+        
         DispatchQueue.main.async {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm:ss.SSS"
-            let timeStr = formatter.string(from: Date())
-            self.logs.append("[\(timeStr)] \(message)")
-            if self.logs.count > 100 {
+            self.logs.append(formattedMessage)
+            if self.logs.count > 150 {
                 self.logs.removeFirst()
             }
+            self.persistLogs()
         }
+    }
+    
+    private func persistLogs() {
+        guard let url = logFileURL else { return }
+        let rawLogs = self.logs.map { line -> String in
+            if line.hasPrefix("[PREV] ") {
+                return String(line.dropFirst(7))
+            }
+            return line
+        }
+        let content = rawLogs.joined(separator: "\n")
+        try? content.write(to: url, atomically: true, encoding: .utf8)
     }
 }
 
@@ -72,13 +117,37 @@ class InferenceEngine {
         if !isMockMode, let url = modelURL {
             LogStore.shared.log("[InferenceEngine] Gemma 4 model found at: \(url.path). Configuring LiteRT-LM Engine...")
             
+            // Enable experimental flags and set visual token budget (reduces image prefill memory footprint by ~8x)
+            ExperimentalFlags.optIntoExperimentalAPIs()
+            
+            let thermalState = ProcessInfo.processInfo.thermalState
+            let thermalLabel: String
+            let tokenBudget: Int32
+            switch thermalState {
+            case .nominal:
+                thermalLabel = "Nominal (ปกติ)"
+                tokenBudget = 560
+            case .fair:
+                thermalLabel = "Fair (อุ่นเล็กน้อย)"
+                tokenBudget = 280
+            case .serious, .critical:
+                thermalLabel = "Serious/Critical (ร้อน/วิกฤต)"
+                tokenBudget = 140
+            @unknown default:
+                thermalLabel = "Unknown"
+                tokenBudget = 140
+            }
+            ExperimentalFlags.visualTokenBudget = tokenBudget
+            LogStore.shared.log("[InferenceEngine] Device thermal state is \(thermalLabel). Dynamically adjusted visualTokenBudget to \(tokenBudget) to keep thermals under 45°C.")
+            
             Task {
                 do {
-                    LogStore.shared.log("[InferenceEngine] Attempting GPU initialization with GPU visionBackend...")
+                    LogStore.shared.log("[InferenceEngine] Attempting GPU initialization with CPU visionBackend...")
                     let config = try EngineConfig(
                         modelPath: url.path,
                         backend: .gpu,
-                        visionBackend: .gpu,
+                        visionBackend: .cpu(), // CPU vision delegate is required for VLM model stability on iOS GPU backend
+                        maxNumTokens: 512, // Further restrict KV cache size to allow GPU creation success
                         cacheDir: FileManager.default.temporaryDirectory.path
                     )
                     let engineInstance = Engine(engineConfig: config)
@@ -98,6 +167,7 @@ class InferenceEngine {
                             modelPath: url.path,
                             backend: .cpu(),
                             visionBackend: .cpu(),
+                            maxNumTokens: 512, // Match maxNumTokens for CPU fallback
                             cacheDir: FileManager.default.temporaryDirectory.path
                         )
                         let engineInstance = Engine(engineConfig: config)
@@ -247,47 +317,59 @@ class InferenceEngine {
         }
         
         // ── VLM modes (object/obstacle) ──
-        if !isMockMode, let conversation = self.conversation {
-            // Write JPEG to temporary file
-            let tempFileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jpg")
-            do {
-                try jpegData.write(to: tempFileURL)
-            } catch {
-                LogStore.shared.log("[InferenceEngine] VLM temp write error: \(error.localizedDescription)")
-                runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
-                return
-            }
+        if !isMockMode, let engine = self.engine {
+            LogStore.shared.log("[InferenceEngine] Starting VLM image analysis. Image size: \(jpegData.count) bytes. Prompt: \(promptText)")
             
-            Task {
+            Task.detached(priority: .userInitiated) {
                 do {
-                    let prompt = "\(systemPrompt)\n\nคำสั่ง: \(promptText)"
+                    LogStore.shared.log("[InferenceEngine] Re-creating conversation to clear context history...")
+                    let conversation = try await engine.createConversation()
+                    
+                    LogStore.shared.log("[InferenceEngine] Detached background task started. Constructing Message payload...")
+                    let prompt = "\(self.systemPrompt)\n\nคำสั่ง: \(promptText)"
                     let message = Message(contents: [
-                        Content.imageFile(tempFileURL.path),
+                        Content.imageData(jpegData),
                         Content.text(prompt)
                     ])
                     
                     var accumulatedText = ""
+                    LogStore.shared.log("[InferenceEngine] Sending message payload and starting stream...")
                     
                     // sendMessageStream returns an AsyncThrowingStream of Message chunks
                     for try await chunk in conversation.sendMessageStream(message) {
                         let textChunk = chunk.toString
+                        if accumulatedText.isEmpty {
+                            LogStore.shared.log("[InferenceEngine] First VLM streamed token chunk received: \(textChunk)")
+                        }
                         accumulatedText += textChunk
                         DispatchQueue.main.async {
                             onToken(textChunk)
                         }
                     }
                     
-                    // Clean up temp file
-                    try? FileManager.default.removeItem(at: tempFileURL)
+                    LogStore.shared.log("[InferenceEngine] VLM stream completed. Total response size: \(accumulatedText.count) chars.")
+                    
+                    let lowercasedText = accumulatedText.lowercased()
+                    let isLowConfidence = accumulatedText.contains("ความมั่นใจ: ต่ำ") || 
+                                          accumulatedText.contains("ความมั่นใจ:ต่ำ") || 
+                                          lowercasedText.contains("confidence: low") || 
+                                          lowercasedText.contains("confidence:low")
+                    
+                    let finalizedText: String
+                    if isLowConfidence {
+                        LogStore.shared.log("[InferenceEngine] Low confidence response detected. Applying fallback warning.")
+                        finalizedText = "ไม่แน่ใจ กรุณาถ่ายภาพใหม่"
+                    } else {
+                        finalizedText = accumulatedText
+                    }
                     
                     DispatchQueue.main.async {
-                        completion(accumulatedText)
+                        completion(finalizedText)
                     }
                 } catch {
                     LogStore.shared.log("[InferenceEngine] Real VLM inference error: \(error.localizedDescription)")
-                    try? FileManager.default.removeItem(at: tempFileURL)
                     // Fallback to mock response if local model fails during execution
-                    runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
+                    self.runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
                 }
             }
             return
