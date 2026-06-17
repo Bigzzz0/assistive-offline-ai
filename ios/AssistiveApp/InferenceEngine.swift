@@ -264,7 +264,6 @@ class InferenceEngine {
                 return
             }
             
-            let conversation = self.conversation
             Task.detached(priority: .userInitiated) {
                 do {
                     let prompt = "\(self.systemPrompt)\n\nคำสั่ง: \(promptText)"
