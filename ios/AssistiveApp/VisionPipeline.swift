@@ -2,6 +2,8 @@ import AVFoundation
 import UIKit
 import CoreVideo
 import CoreMedia
+import Vision
+import AudioToolbox
 
 class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     static let shared = VisionPipeline()
@@ -18,6 +20,13 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     
     var onFrameCaptured: ((Data) -> Void)?
     var isFrameRequested: (() -> Bool)?
+    
+    // Point and Speak States
+    var activeMode: ActiveMode = .object
+    private var lastAnalysisTime: Double = 0.0
+    private var lastSpokenText: String = ""
+    private var lastSpokenTime: Double = 0.0
+    private var lastBeepTime: Double = 0.0
     
     func startSession() {
         let captureSession = AVCaptureSession()
@@ -80,6 +89,15 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
         
+        // ── Point and Speak Mode ──
+        if activeMode == .pointAndSpeak {
+            if now - lastAnalysisTime >= 0.25 { // 4 FPS for battery efficiency
+                lastAnalysisTime = now
+                runPointAndSpeak(pixelBuffer: pixelBuffer, now: now)
+            }
+            return
+        }
+        
         // Legacy continuous callback path
         let requested = isFrameRequested?() ?? false
         
@@ -96,6 +114,104 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
                 onFrameCaptured?(jpegData)
             }
         }
+    }
+    
+    private func runPointAndSpeak(pixelBuffer: CVPixelBuffer, now: Double) {
+        let handPoseRequest = VNDetectHumanHandPoseRequest()
+        handPoseRequest.maximumHandCount = 1
+        
+        let textRequest = VNRecognizeTextRequest()
+        textRequest.recognitionLanguages = ["th-TH", "en-US"]
+        textRequest.recognitionLevel = .accurate
+        textRequest.usesLanguageCorrection = true
+        
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
+        
+        do {
+            try handler.perform([handPoseRequest, textRequest])
+        } catch {
+            print("Vision performance error: \(error.localizedDescription)")
+            return
+        }
+        
+        // 1. Extract Index Fingertip
+        guard let handObservation = handPoseRequest.results?.first else {
+            return // No hand detected
+        }
+        
+        guard let indexTipJoint = try? handObservation.recognizedPoint(.indexTip),
+              indexTipJoint.confidence > 0.3 else {
+            return // Index tip not confident
+        }
+        
+        let fingerTipPoint = indexTipJoint.location // Normalized bottom-left coordinate space
+        
+        // 2. Extract Text and check proximity/intersection
+        guard let textObservations = textRequest.results else { return }
+        
+        var minDistance: CGFloat = 1.0
+        var detectedText: String? = nil
+        
+        for observation in textObservations {
+            // Expand bounding box slightly for easier UX (2% horizontal/vertical padding)
+            let box = observation.boundingBox
+            let expandedBox = box.insetBy(dx: -0.02, dy: -0.02)
+            
+            // Calculate distance to text box
+            let dist = distance(from: fingerTipPoint, to: box)
+            if dist < minDistance {
+                minDistance = dist
+            }
+            
+            // Check containment
+            if expandedBox.contains(fingerTipPoint) {
+                if let candidate = observation.topCandidates(1).first {
+                    detectedText = candidate.string
+                }
+            }
+        }
+        
+        // 3. Play distance beep feedback
+        let beepInterval: Double
+        if minDistance < 0.03 {
+            beepInterval = 0.15 // Very close/touching: rapid ticks
+        } else if minDistance < 0.08 {
+            beepInterval = 0.40 // Medium distance
+        } else if minDistance < 0.15 {
+            beepInterval = 0.80 // Farther
+        } else {
+            beepInterval = 0.0  // Out of range: no sound
+        }
+        
+        if beepInterval > 0.0 && (now - lastBeepTime >= beepInterval) {
+            lastBeepTime = now
+            // System sound ID 1104 is a gentle Tink sound
+            AudioServicesPlaySystemSound(1104)
+        }
+        
+        // 4. Speak text if hovering over it
+        if let text = detectedText, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if text != lastSpokenText || (now - lastSpokenTime >= 2.0) {
+                lastSpokenText = text
+                lastSpokenTime = now
+                
+                // Trigger tactile feedback (medium impact)
+                DispatchQueue.main.async {
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.prepare()
+                    generator.impactOccurred()
+                }
+                
+                // Speak the text
+                AudioPipeline.shared.speak(text)
+            }
+        }
+    }
+    
+    private func distance(from point: CGPoint, to rect: CGRect) -> CGFloat {
+        let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
+        let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
+        return sqrt(dx*dx + dy*dy)
     }
     
     private func convertToJpeg(pixelBuffer: CVPixelBuffer) -> Data? {

@@ -5,12 +5,14 @@ enum ActiveMode: String, CaseIterable {
     case read = "📖 อ่านหนังสือ (OCR)"
     case object = "👁️ หาวัตถุบนโต๊ะ"
     case obstacle = "🚧 ตรวจสิ่งกีดขวาง"
+    case pointAndSpeak = "👉 ชี้แล้วอ่าน"
     
     var command: String {
         switch self {
         case .read: return "อ่าน"
         case .object: return "ดู"
         case .obstacle: return "ข้างหน้า"
+        case .pointAndSpeak: return "ชี้"
         }
     }
     
@@ -19,6 +21,7 @@ enum ActiveMode: String, CaseIterable {
         case .read: return "โหมดอ่านหนังสือ"
         case .object: return "โหมดหาวัตถุ"
         case .obstacle: return "โหมดตรวจจับสิ่งกีดขวาง"
+        case .pointAndSpeak: return "โหมดชี้แล้วอ่าน"
         }
     }
     
@@ -239,6 +242,20 @@ struct ContentView: View {
                             .cornerRadius(12)
                     }
                     .accessibilityLabel("ปุ่มตรวจสอบสิ่งกีดขวางทางเดินด้านหน้า")
+                    
+                    Button(action: {
+                        currentMode = .pointAndSpeak
+                        announceMode()
+                    }) {
+                        Text("👉 ชี้แล้วอ่าน (Point & Speak)")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 60)
+                            .background(Color.purple)
+                            .cornerRadius(12)
+                    }
+                    .accessibilityLabel("ปุ่มโหมดชี้แล้วอ่าน ยื่นนิ้วชี้ไปเพื่ออ่านตัวหนังสือใต้ปลายนิ้ว")
                 }
                 
                 // ---- Dev Panel + Model Manager toggles ----
@@ -518,6 +535,10 @@ struct ContentView: View {
             requestCameraPermission()
             isMockMode = InferenceEngine.shared.initialize() ? InferenceEngine.shared.isMock() : true
             statusText = "ระบบพร้อมทำงาน"
+            VisionPipeline.shared.activeMode = currentMode
+        }
+        .onChange(of: currentMode) { newMode in
+            VisionPipeline.shared.activeMode = newMode
         }
         .onChange(of: downloader.isComplete) { isComplete in
             if isComplete {
@@ -559,6 +580,11 @@ struct ContentView: View {
     // MARK: - Actions
     
     private func triggerCommand(_ command: String) {
+        if command == "ชี้" {
+            speakText("โหมดชี้แล้วอ่านกำลังทำงานอยู่ ยื่นนิ้วชี้ไปหน้ากล้องเพื่อสแกนอ่านข้อความ")
+            return
+        }
+        
         guard !isProcessing else { return }
         
         // If VLM mode is triggered, but model is still loading in the background
