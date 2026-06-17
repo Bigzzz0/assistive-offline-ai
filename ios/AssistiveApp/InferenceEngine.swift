@@ -56,8 +56,8 @@ class InferenceEngine {
                 
                 Task {
                     do {
-                        try await engineInstance.initialize()
-                        self.conversation = try await engineInstance.createConversation()
+                        try engineInstance.initialize()
+                        self.conversation = try engineInstance.createConversation()
                         print("[InferenceEngine] LiteRT-LM Engine & Conversation initialized successfully.")
                     } catch {
                         print("[InferenceEngine] Failed to initialize LiteRT-LM: \(error.localizedDescription)")
@@ -212,9 +212,9 @@ class InferenceEngine {
                     
                     var accumulatedText = ""
                     
-                    // streamMessage returns an AsyncThrowingStream of chunks
-                    for try await chunk in conversation.streamMessage(message) {
-                        let textChunk = "\(chunk)"
+                    // sendMessageStream returns an AsyncThrowingStream of Message chunks
+                    for try await chunk in conversation.sendMessageStream(message) {
+                        let textChunk = chunk.toString
                         accumulatedText += textChunk
                         DispatchQueue.main.async {
                             onToken(textChunk)

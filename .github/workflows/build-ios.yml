@@ -13,6 +13,8 @@ jobs:
   build:
     name: Generate and Build iOS App
     runs-on: macos-14
+    env:
+      GIT_LFS_SKIP_SMUDGE: 1
 
     steps:
       - name: Checkout repository
