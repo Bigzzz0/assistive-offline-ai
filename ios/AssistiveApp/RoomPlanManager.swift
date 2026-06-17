@@ -42,9 +42,9 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
             let doorPos = simd_make_float3(door.transform.columns.3.x, door.transform.columns.3.y, door.transform.columns.3.z)
             let distance = simd_distance(doorPos, simd_make_float3(0, 0, 0))
             
-            let isOpenText: String
-            if #available(iOS 17.0, *) {
-                isOpenText = door.isOpen ? "เปิดอยู่" : "ปิดอยู่"
+            var isOpenText = "ปิดอยู่"
+            if case let .door(isOpen) = door.category {
+                isOpenText = isOpen ? "เปิดอยู่" : "ปิดอยู่"
             } else {
                 // Heuristic: check transform rotation angle around Y-axis
                 // Extraction of rotation around Y axis from rotation matrix
