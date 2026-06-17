@@ -264,9 +264,10 @@ class InferenceEngine {
                 return
             }
             
-            Task {
+            let conversation = self.conversation
+            Task.detached(priority: .userInitiated) {
                 do {
-                    let prompt = "\(systemPrompt)\n\nคำสั่ง: \(promptText)"
+                    let prompt = "\(self.systemPrompt)\n\nคำสั่ง: \(promptText)"
                     let message = Message(contents: [
                         Content.imageFile(tempFileURL.path),
                         Content.text(prompt)
@@ -293,7 +294,7 @@ class InferenceEngine {
                     LogStore.shared.log("[InferenceEngine] Real VLM inference error: \(error.localizedDescription)")
                     try? FileManager.default.removeItem(at: tempFileURL)
                     // Fallback to mock response if local model fails during execution
-                    runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
+                    self.runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
                 }
             }
             return

@@ -36,6 +36,11 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         output.setSampleBufferDelegate(self, queue: DispatchQueue(label: "camera_queue"))
         if captureSession.canAddOutput(output) {
             captureSession.addOutput(output)
+            if let connection = output.connection(with: .video) {
+                if connection.isVideoOrientationSupported {
+                    connection.videoOrientation = .portrait
+                }
+            }
         }
         
         self.session = captureSession
