@@ -56,8 +56,8 @@ class InferenceEngine {
                 
                 Task {
                     do {
-                        try engineInstance.initialize()
-                        self.conversation = try engineInstance.createConversation()
+                        try await engineInstance.initialize()
+                        self.conversation = try await engineInstance.createConversation()
                         print("[InferenceEngine] LiteRT-LM Engine & Conversation initialized successfully.")
                     } catch {
                         print("[InferenceEngine] Failed to initialize LiteRT-LM: \(error.localizedDescription)")
