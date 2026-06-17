@@ -320,7 +320,7 @@ struct ContentView: View {
                             } else {
                                 Button(action: {
                                     downloader.deleteModel(.vlm)
-                                    isMockMode = InferenceEngine.shared.initialize() ? InferenceEngine.shared.isMock() : true
+                                    isMockMode = InferenceEngine.shared.initialize(force: true) ? InferenceEngine.shared.isMock() : true
                                     vibrateHaptic(level: 1)
                                 }) {
                                     Text("🗑️ ลบโมเดล Gemma 4")
@@ -341,7 +341,7 @@ struct ContentView: View {
                         }
                         
                         Button(action: {
-                            isMockMode = InferenceEngine.shared.initialize() ? InferenceEngine.shared.isMock() : true
+                            isMockMode = InferenceEngine.shared.initialize(force: true) ? InferenceEngine.shared.isMock() : true
                             vibrateHaptic(level: 1)
                         }) {
                             Text("🔄 โหลดโมเดลใหม่")
@@ -429,8 +429,11 @@ struct ContentView: View {
         }
         .onChange(of: downloader.isComplete) { isComplete in
             if isComplete {
-                isMockMode = InferenceEngine.shared.initialize() ? InferenceEngine.shared.isMock() : true
+                isMockMode = InferenceEngine.shared.initialize(force: true) ? InferenceEngine.shared.isMock() : true
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("InferenceEngineStateDidChange"))) { _ in
+            isMockMode = InferenceEngine.shared.isMock()
         }
     }
     

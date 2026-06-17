@@ -24,7 +24,13 @@ class InferenceEngine {
     
     // MARK: - Initialization
     
-    func initialize() -> Bool {
+    func initialize(force: Bool = false) -> Bool {
+        if !force, isInitialized, !isMockMode, self.conversation != nil {
+            return true
+        }
+        
+        isInitialized = false
+        
         let fileManager = FileManager.default
         let paths = fileManager.urls(for: .documentDirectory, in: .userDomainMask)
         guard let documentsDirectory = paths.first else { return false }
@@ -41,36 +47,63 @@ class InferenceEngine {
             isMockMode = false
         } else {
             isMockMode = true
+            isInitialized = true
         }
         
         if !isMockMode, let url = modelURL {
             print("[InferenceEngine] Gemma 4 model found at: \(url.path). Configuring LiteRT-LM Engine...")
-            do {
-                let config = try EngineConfig(
-                    modelPath: url.path,
-                    backend: .gpu,
-                    cacheDir: FileManager.default.temporaryDirectory.path
-                )
-                let engineInstance = Engine(engineConfig: config)
-                self.engine = engineInstance
-                
-                Task {
+            
+            Task {
+                do {
+                    print("[InferenceEngine] Attempting GPU initialization with GPU visionBackend...")
+                    let config = try EngineConfig(
+                        modelPath: url.path,
+                        backend: .gpu,
+                        visionBackend: .gpu,
+                        cacheDir: FileManager.default.temporaryDirectory.path
+                    )
+                    let engineInstance = Engine(engineConfig: config)
+                    try await engineInstance.initialize()
+                    self.engine = engineInstance
+                    self.conversation = try await engineInstance.createConversation()
+                    print("[InferenceEngine] LiteRT-LM Engine & Conversation initialized successfully on GPU.")
+                    self.isInitialized = true
+                    
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(name: NSNotification.Name("InferenceEngineStateDidChange"), object: nil)
+                    }
+                } catch {
+                    print("[InferenceEngine] GPU initialization failed: \(error.localizedDescription). Falling back to CPU...")
                     do {
+                        let config = try EngineConfig(
+                            modelPath: url.path,
+                            backend: .cpu(),
+                            visionBackend: .cpu(),
+                            cacheDir: FileManager.default.temporaryDirectory.path
+                        )
+                        let engineInstance = Engine(engineConfig: config)
                         try await engineInstance.initialize()
+                        self.engine = engineInstance
                         self.conversation = try await engineInstance.createConversation()
-                        print("[InferenceEngine] LiteRT-LM Engine & Conversation initialized successfully.")
+                        print("[InferenceEngine] LiteRT-LM Engine & Conversation initialized successfully on CPU.")
+                        self.isInitialized = true
+                        
+                        DispatchQueue.main.async {
+                            NotificationCenter.default.post(name: NSNotification.Name("InferenceEngineStateDidChange"), object: nil)
+                        }
                     } catch {
-                        print("[InferenceEngine] Failed to initialize LiteRT-LM: \(error.localizedDescription)")
+                        print("[InferenceEngine] CPU initialization failed: \(error.localizedDescription). Running in Mock Mode.")
                         self.isMockMode = true
+                        self.isInitialized = true
+                        
+                        DispatchQueue.main.async {
+                            NotificationCenter.default.post(name: NSNotification.Name("InferenceEngineStateDidChange"), object: nil)
+                        }
                     }
                 }
-            } catch {
-                print("[InferenceEngine] Failed to create EngineConfig: \(error.localizedDescription)")
-                self.isMockMode = true
             }
         }
         
-        isInitialized = true
         return true
     }
     
