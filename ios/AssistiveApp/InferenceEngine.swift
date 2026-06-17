@@ -330,8 +330,22 @@ class InferenceEngine {
                     
                     LogStore.shared.log("[InferenceEngine] VLM stream completed. Total response size: \(accumulatedText.count) chars.")
                     
+                    let lowercasedText = accumulatedText.lowercased()
+                    let isLowConfidence = accumulatedText.contains("ความมั่นใจ: ต่ำ") || 
+                                          accumulatedText.contains("ความมั่นใจ:ต่ำ") || 
+                                          lowercasedText.contains("confidence: low") || 
+                                          lowercasedText.contains("confidence:low")
+                    
+                    let finalizedText: String
+                    if isLowConfidence {
+                        LogStore.shared.log("[InferenceEngine] Low confidence response detected. Applying fallback warning.")
+                        finalizedText = "ไม่แน่ใจ กรุณาถ่ายภาพใหม่"
+                    } else {
+                        finalizedText = accumulatedText
+                    }
+                    
                     DispatchQueue.main.async {
-                        completion(accumulatedText)
+                        completion(finalizedText)
                     }
                 } catch {
                     LogStore.shared.log("[InferenceEngine] Real VLM inference error: \(error.localizedDescription)")
