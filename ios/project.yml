@@ -1,10 +1,6 @@
 name: AssistiveApp
 options:
   bundleIdPrefix: com.assistive.system
-packages:
-  LiteRTLM:
-    url: https://github.com/nicklama/litert-lm-swift
-    from: "0.1.0"
 targets:
   AssistiveApp:
     type: application
@@ -22,4 +18,3 @@ targets:
       - sdk: AudioToolbox.framework
       - sdk: CoreHaptics.framework
       - sdk: Vision.framework
-      - package: LiteRTLM
