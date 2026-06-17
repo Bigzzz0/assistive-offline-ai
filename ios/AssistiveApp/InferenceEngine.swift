@@ -2,6 +2,25 @@ import Foundation
 import Vision
 import UIKit
 import LiteRTLM
+import Combine
+
+class LogStore: ObservableObject {
+    static let shared = LogStore()
+    @Published var logs: [String] = []
+    
+    func log(_ message: String) {
+        print(message)
+        DispatchQueue.main.async {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm:ss.SSS"
+            let timeStr = formatter.string(from: Date())
+            self.logs.append("[\(timeStr)] \(message)")
+            if self.logs.count > 100 {
+                self.logs.removeFirst()
+            }
+        }
+    }
+}
 
 class InferenceEngine {
     static let shared = InferenceEngine()
@@ -51,11 +70,11 @@ class InferenceEngine {
         }
         
         if !isMockMode, let url = modelURL {
-            print("[InferenceEngine] Gemma 4 model found at: \(url.path). Configuring LiteRT-LM Engine...")
+            LogStore.shared.log("[InferenceEngine] Gemma 4 model found at: \(url.path). Configuring LiteRT-LM Engine...")
             
             Task {
                 do {
-                    print("[InferenceEngine] Attempting GPU initialization with GPU visionBackend...")
+                    LogStore.shared.log("[InferenceEngine] Attempting GPU initialization with GPU visionBackend...")
                     let config = try EngineConfig(
                         modelPath: url.path,
                         backend: .gpu,
@@ -66,14 +85,14 @@ class InferenceEngine {
                     try await engineInstance.initialize()
                     self.engine = engineInstance
                     self.conversation = try await engineInstance.createConversation()
-                    print("[InferenceEngine] LiteRT-LM Engine & Conversation initialized successfully on GPU.")
+                    LogStore.shared.log("[InferenceEngine] LiteRT-LM Engine & Conversation initialized successfully on GPU.")
                     self.isInitialized = true
                     
                     DispatchQueue.main.async {
                         NotificationCenter.default.post(name: NSNotification.Name("InferenceEngineStateDidChange"), object: nil)
                     }
                 } catch {
-                    print("[InferenceEngine] GPU initialization failed: \(error.localizedDescription). Falling back to CPU...")
+                    LogStore.shared.log("[InferenceEngine] GPU initialization failed: \(error.localizedDescription). Falling back to CPU...")
                     do {
                         let config = try EngineConfig(
                             modelPath: url.path,
@@ -85,14 +104,14 @@ class InferenceEngine {
                         try await engineInstance.initialize()
                         self.engine = engineInstance
                         self.conversation = try await engineInstance.createConversation()
-                        print("[InferenceEngine] LiteRT-LM Engine & Conversation initialized successfully on CPU.")
+                        LogStore.shared.log("[InferenceEngine] LiteRT-LM Engine & Conversation initialized successfully on CPU.")
                         self.isInitialized = true
                         
                         DispatchQueue.main.async {
                             NotificationCenter.default.post(name: NSNotification.Name("InferenceEngineStateDidChange"), object: nil)
                         }
                     } catch {
-                        print("[InferenceEngine] CPU initialization failed: \(error.localizedDescription). Running in Mock Mode.")
+                        LogStore.shared.log("[InferenceEngine] CPU initialization failed: \(error.localizedDescription). Running in Mock Mode.")
                         self.isMockMode = true
                         self.isInitialized = true
                         
@@ -111,6 +130,10 @@ class InferenceEngine {
         return isMockMode
     }
     
+    func isReady() -> Bool {
+        return isInitialized
+    }
+    
     // MARK: - Real Vision OCR (Thai + English)
     
     /// Performs native offline OCR using Apple Vision framework.
@@ -123,7 +146,7 @@ class InferenceEngine {
         
         let request = VNRecognizeTextRequest { request, error in
             if let error = error {
-                print("[InferenceEngine] OCR error: \(error.localizedDescription)")
+                LogStore.shared.log("[InferenceEngine] OCR error: \(error.localizedDescription)")
                 DispatchQueue.main.async {
                     completion("เกิดข้อผิดพลาดในการอ่านข้อความ")
                 }
@@ -175,7 +198,7 @@ class InferenceEngine {
             do {
                 try handler.perform([request])
             } catch {
-                print("[InferenceEngine] Vision handler error: \(error.localizedDescription)")
+                LogStore.shared.log("[InferenceEngine] Vision handler error: \(error.localizedDescription)")
                 DispatchQueue.main.async {
                     completion("เกิดข้อผิดพลาดในการประมวลผลภาพ")
                 }
@@ -230,7 +253,7 @@ class InferenceEngine {
             do {
                 try jpegData.write(to: tempFileURL)
             } catch {
-                print("[InferenceEngine] VLM temp write error: \(error.localizedDescription)")
+                LogStore.shared.log("[InferenceEngine] VLM temp write error: \(error.localizedDescription)")
                 runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
                 return
             }
@@ -261,7 +284,7 @@ class InferenceEngine {
                         completion(accumulatedText)
                     }
                 } catch {
-                    print("[InferenceEngine] Real VLM inference error: \(error.localizedDescription)")
+                    LogStore.shared.log("[InferenceEngine] Real VLM inference error: \(error.localizedDescription)")
                     try? FileManager.default.removeItem(at: tempFileURL)
                     // Fallback to mock response if local model fails during execution
                     runMockVLM(promptText: promptText, onToken: onToken, completion: completion)

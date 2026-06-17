@@ -50,6 +50,18 @@ struct ContentView: View {
     @State private var cameraSessionStarted: Bool = false
     
     @ObservedObject private var downloader = IOSModelDownloader.shared
+    @ObservedObject private var logStore = LogStore.shared
+    @State private var showDebugConsole: Bool = true
+    
+    private var statusLabel: String {
+        if isMockMode {
+            return "ระบบพร้อมทำงาน (โหมดจำลอง)"
+        }
+        if !InferenceEngine.shared.isReady() {
+            return "⚡ กำลังโหลดโมเดล AI..."
+        }
+        return "ระบบพร้อมทำงาน (ใช้งานจริง)"
+    }
     
     // Performance Mock Metrics for UI presentation
     @State private var memoryUsageMB: Float = 0
@@ -149,15 +161,15 @@ struct ContentView: View {
                         Text("สถานะระบบ")
                             .font(.system(size: 12))
                             .foregroundColor(.gray)
-                        Text(statusText)
+                        Text(statusLabel)
                             .font(.system(size: 18, weight: .bold))
-                            .foregroundColor(.green)
+                            .foregroundColor(isMockMode ? .gray : (!InferenceEngine.shared.isReady() ? .yellow : .green))
                     }
                     Spacer()
                     if lastLatencyMs > 0 {
                         Text("\(lastLatencyMs)ms")
                             .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(.green)
+                            .foregroundColor(isMockMode ? .gray : (!InferenceEngine.shared.isReady() ? .yellow : .green))
                     }
                 }
                 .padding()
@@ -166,7 +178,7 @@ struct ContentView: View {
                 .cornerRadius(12)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.green, lineWidth: 2)
+                        .stroke(isMockMode ? Color.gray : (!InferenceEngine.shared.isReady() ? Color.yellow : Color.green), lineWidth: 2)
                 )
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("สถานะระบบ \(statusText) การวิเคราะห์ภาพล่าสุดใช้เวลา \(lastLatencyMs) มิลลิวินาที")
@@ -407,6 +419,65 @@ struct ContentView: View {
                     .background(Color(red: 0.05, green: 0.08, blue: 0.15))
                     .cornerRadius(12)
                 }
+                
+                // ---- Collapsible Debug Console Panel ----
+                VStack(spacing: 8) {
+                    Button(action: {
+                        withAnimation {
+                            showDebugConsole.toggle()
+                        }
+                    }) {
+                        HStack {
+                            Text("📋 Debug Console (\(logStore.logs.count) logs)")
+                                .font(.system(size: 13, weight: .bold))
+                            Spacer()
+                            Image(systemName: showDebugConsole ? "chevron.down" : "chevron.up")
+                        }
+                        .foregroundColor(.cyan)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                        .background(Color.cyan.opacity(0.1))
+                        .cornerRadius(6)
+                    }
+                    
+                    if showDebugConsole {
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    if logStore.logs.isEmpty {
+                                        Text("[No logs recorded yet]")
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundColor(.gray)
+                                    } else {
+                                        ForEach(logStore.logs, id: \.self) { log in
+                                            Text(log)
+                                                .font(.system(size: 10, design: .monospaced))
+                                                .foregroundColor(.green)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .id(log)
+                                        }
+                                    }
+                                }
+                                .padding(6)
+                            }
+                            .frame(height: 150)
+                            .background(Color.black.opacity(0.85))
+                            .cornerRadius(8)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
+                            )
+                            .onChange(of: logStore.logs.count) { _ in
+                                if let lastLog = logStore.logs.last {
+                                    withAnimation {
+                                        proxy.scrollTo(lastLog, anchor: .bottom)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 8)
             }
             .padding()
         }
@@ -468,6 +539,15 @@ struct ContentView: View {
     
     private func triggerCommand(_ command: String) {
         guard !isProcessing else { return }
+        
+        // If VLM mode is triggered, but model is still loading in the background
+        if !isMockMode && !InferenceEngine.shared.isReady() && !command.contains("อ่าน") {
+            vibrateHaptic(level: 1)
+            speakText("กำลังโหลดโมเดล AI กรุณารอสักครู่")
+            aiResultText = "ระบบกำลังดาวน์โหลดและโหลดโมเดล AI เข้าสู่หน่วยความจำ (RAM) กรุณารอสักครู่..."
+            return
+        }
+        
         isProcessing = true
         vibrateHaptic(level: 1)
         speakText("กำลังทำคำสั่ง \(command)")
