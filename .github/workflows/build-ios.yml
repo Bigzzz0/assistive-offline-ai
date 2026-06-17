@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Generate and Build iOS App
@@ -32,6 +35,7 @@ jobs:
 
       - name: Build iOS App (Ad-Hoc Signing)
         run: |
+          set -o pipefail
           cd ios
           xcodebuild -project AssistiveApp.xcodeproj \
                      -scheme AssistiveApp \
@@ -41,7 +45,17 @@ jobs:
                      CODE_SIGN_IDENTITY="-" \
                      CODE_SIGNING_REQUIRED=NO \
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
-                     clean build
+                     clean build 2>&1 | tee xcodebuild.log
+
+      - name: Push Build Log on Failure
+        if: failure()
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B build-log-branch
+          git add ios/xcodebuild.log
+          git commit -m "chore: upload build log on failure"
+          git push -f origin build-log-branch
 
       - name: Package IPA
         run: |
