@@ -6,6 +6,8 @@ enum ActiveMode: String, CaseIterable {
     case object = "👁️ หาวัตถุบนโต๊ะ"
     case obstacle = "🚧 ตรวจสิ่งกีดขวาง"
     case pointAndSpeak = "👉 ชี้แล้วอ่าน"
+    case peopleDetection = "👤 เตือนระยะคน"
+    case roomPlan = "🪑 ค้นหาเก้าอี้และประตู"
     
     var command: String {
         switch self {
@@ -13,6 +15,8 @@ enum ActiveMode: String, CaseIterable {
         case .object: return "ดู"
         case .obstacle: return "ข้างหน้า"
         case .pointAndSpeak: return "ชี้"
+        case .peopleDetection: return "คน"
+        case .roomPlan: return "สแกนห้อง"
         }
     }
     
@@ -22,6 +26,8 @@ enum ActiveMode: String, CaseIterable {
         case .object: return "โหมดหาวัตถุ"
         case .obstacle: return "โหมดตรวจจับสิ่งกีดขวาง"
         case .pointAndSpeak: return "โหมดชี้แล้วอ่าน"
+        case .peopleDetection: return "โหมดเตือนระยะคน"
+        case .roomPlan: return "โหมดค้นหาเก้าอี้และประตู"
         }
     }
     
