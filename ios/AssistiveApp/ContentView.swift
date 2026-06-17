@@ -422,22 +422,43 @@ struct ContentView: View {
                 
                 // ---- Collapsible Debug Console Panel ----
                 VStack(spacing: 8) {
-                    Button(action: {
-                        withAnimation {
-                            showDebugConsole.toggle()
+                    HStack(spacing: 8) {
+                        Button(action: {
+                            withAnimation {
+                                showDebugConsole.toggle()
+                            }
+                        }) {
+                            HStack {
+                                Text("📋 Debug Console (\(logStore.logs.count) logs)")
+                                    .font(.system(size: 13, weight: .bold))
+                                Spacer()
+                                Image(systemName: showDebugConsole ? "chevron.down" : "chevron.up")
+                            }
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            .background(Color.cyan.opacity(0.1))
+                            .cornerRadius(6)
                         }
-                    }) {
-                        HStack {
-                            Text("📋 Debug Console (\(logStore.logs.count) logs)")
-                                .font(.system(size: 13, weight: .bold))
-                            Spacer()
-                            Image(systemName: showDebugConsole ? "chevron.down" : "chevron.up")
+                        
+                        Button(action: {
+                            let allLogs = logStore.logs.joined(separator: "\n")
+                            UIPasteboard.general.string = allLogs
+                            vibrateHaptic(level: 1)
+                            speakText("คัดลอกบันทึกสำเร็จ")
+                        }) {
+                            HStack {
+                                Image(systemName: "doc.on.doc")
+                                Text("ก๊อปปี้")
+                                    .font(.system(size: 13, weight: .bold))
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.cyan)
+                            .cornerRadius(6)
                         }
-                        .foregroundColor(.cyan)
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                        .background(Color.cyan.opacity(0.1))
-                        .cornerRadius(6)
+                        .accessibilityLabel("คัดลอกบันทึกทั้งหมด")
                     }
                     
                     if showDebugConsole {

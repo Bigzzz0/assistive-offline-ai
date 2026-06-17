@@ -298,11 +298,14 @@ class InferenceEngine {
         }
         
         // ── VLM modes (object/obstacle) ──
-        if !isMockMode, let conversation = self.conversation {
+        if !isMockMode, let engine = self.engine {
             LogStore.shared.log("[InferenceEngine] Starting VLM image analysis. Image size: \(jpegData.count) bytes. Prompt: \(promptText)")
             
             Task.detached(priority: .userInitiated) {
                 do {
+                    LogStore.shared.log("[InferenceEngine] Re-creating conversation to clear context history...")
+                    let conversation = try await engine.createConversation()
+                    
                     LogStore.shared.log("[InferenceEngine] Detached background task started. Constructing Message payload...")
                     let prompt = "\(self.systemPrompt)\n\nคำสั่ง: \(promptText)"
                     let message = Message(contents: [
