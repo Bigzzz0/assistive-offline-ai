@@ -320,11 +320,7 @@ struct ContentView: View {
     }
     
     private func speakText(_ text: String) {
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "th-TH")
-        utterance.rate = 0.5
-        let synthesizer = AVSpeechSynthesizer()
-        synthesizer.speak(utterance)
+        AudioPipeline.shared.speak(text)
     }
     
     private func vibrateHaptic(level: Int) {

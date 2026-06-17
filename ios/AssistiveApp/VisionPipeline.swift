@@ -1,5 +1,7 @@
 import AVFoundation
 import UIKit
+import CoreVideo
+import CoreMedia
 
 class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     static let shared = VisionPipeline()
