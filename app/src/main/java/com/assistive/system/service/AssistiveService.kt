@@ -49,9 +49,17 @@ class AssistiveService : Service() {
     private val _inferenceOutput = MutableStateFlow("")
     val inferenceOutput: StateFlow<String> = _inferenceOutput
 
-    private var pendingPrompt: String? = null
-    private var isAnalyzing = false
+    data class AnalysisTask(
+        val imageBytes: ByteArray,
+        val prompt: String,
+        val timestamp: Long = System.currentTimeMillis()
+    )
 
+    private val pendingPromptsQueue = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    private val analysisQueue = java.util.concurrent.ConcurrentLinkedQueue<AnalysisTask>()
+    private val MAX_QUEUE_SIZE = 3
+    private var isAnalyzing = false
+ 
     private val NOTIFICATION_ID = 1001
     private val CHANNEL_ID = "AssistiveServiceChannel"
 
@@ -112,7 +120,14 @@ class AssistiveService : Service() {
     }
 
     fun hasPendingPrompt(): Boolean {
-        return pendingPrompt != null && !isAnalyzing
+        return !pendingPromptsQueue.isEmpty()
+    }
+
+    private fun enqueuePrompt(promptStr: String) {
+        if (pendingPromptsQueue.size >= MAX_QUEUE_SIZE) {
+            pendingPromptsQueue.poll()
+        }
+        pendingPromptsQueue.offer(promptStr)
     }
 
     fun handleVoiceCommand(text: String) {
@@ -121,36 +136,39 @@ class AssistiveService : Service() {
         
         when {
             prompt.contains("หยุด") -> {
-                pendingPrompt = null
+                pendingPromptsQueue.clear()
+                analysisQueue.clear()
+                audioPipeline.stopSpeaking()
+                isAnalyzing = false
                 audioPipeline.speak("หยุดทำงาน")
                 _serviceStatus.value = "หยุดทำงานชั่วคราว"
             }
             prompt.contains("อ่าน") -> {
-                pendingPrompt = "อ่านป้ายและข้อความภาษาไทยในภาพ"
+                enqueuePrompt("อ่านป้ายและข้อความภาษาไทยในภาพ")
                 _serviceStatus.value = "คำสั่ง: กำลังอ่านข้อความ..."
                 hapticManager.vibrateGeneralInfo()
                 audioPipeline.speak("กำลังอ่านข้อความ")
             }
             prompt.contains("ดู") || prompt.contains("สิ่งของ") -> {
-                pendingPrompt = "ระบุสิ่งของที่วางอยู่บนโต๊ะด้านหน้า"
+                enqueuePrompt("ระบุสิ่งของที่วางอยู่บนโต๊ะด้านหน้า")
                 _serviceStatus.value = "คำสั่ง: กำลังบอกสิ่งของ..."
                 hapticManager.vibrateGeneralInfo()
                 audioPipeline.speak("กำลังสแกนสิ่งของ")
             }
             prompt.contains("ข้างหน้า") || prompt.contains("กีดขวาง") -> {
-                pendingPrompt = "ตรวจสอบสิ่งกีดขวางบนทางเดินด้านหน้าและเตือนภัย"
+                enqueuePrompt("ตรวจสอบสิ่งกีดขวางบนทางเดินด้านหน้าและเตือนภัย")
                 _serviceStatus.value = "คำสั่ง: ตรวจสอบสิ่งกีดขวาง..."
                 hapticManager.vibrateWarning()
                 audioPipeline.speak("กำลังตรวจสอบสิ่งกีดขวาง")
             }
             prompt.contains("มีอะไร") || prompt.contains("ช่วย") -> {
-                pendingPrompt = "อธิบายสภาพแวดล้อมรอบตัวในภาพโดยละเอียด"
+                enqueuePrompt("อธิบายสภาพแวดล้อมรอบตัวในภาพโดยละเอียด")
                 _serviceStatus.value = "คำสั่ง: กำลังวิเคราะห์สภาพแวดล้อม..."
                 hapticManager.vibrateGeneralInfo()
                 audioPipeline.speak("กำลังวิเคราะห์สภาพแวดล้อม")
             }
             prompt.contains("อันตราย") -> {
-                pendingPrompt = "มีสิ่งอันตรายในภาพหรือไม่"
+                enqueuePrompt("มีสิ่งอันตรายในภาพหรือไม่")
                 _serviceStatus.value = "คำสั่ง: กำลังตรวจสอบความปลอดภัย..."
                 hapticManager.vibrateWarning()
                 audioPipeline.speak("กำลังตรวจสอบความปลอดภัย")
@@ -162,19 +180,32 @@ class AssistiveService : Service() {
      * Entry point for camera frames coming from VisionPipeline.
      */
     fun onCameraFrameAvailable(jpegBytes: ByteArray) {
-        val prompt = pendingPrompt ?: return
+        val prompt = pendingPromptsQueue.poll() ?: return
+        
+        if (analysisQueue.size >= MAX_QUEUE_SIZE) {
+            val evicted = analysisQueue.poll()
+            Log.w("AssistiveService", "Queue full, evicting task with prompt: ${evicted?.prompt}")
+        }
+        
+        analysisQueue.offer(AnalysisTask(jpegBytes, prompt))
+        serviceScope.launch {
+            processNextTask()
+        }
+    }
+
+    private fun processNextTask() {
         if (isAnalyzing) return
+        val task = analysisQueue.poll() ?: return
         isAnalyzing = true
-        pendingPrompt = null // consume prompt
- 
+
         _serviceStatus.value = "กำลังประมวลผลด้วย AI..."
         _inferenceOutput.value = ""
- 
+
         serviceScope.launch {
             val fullResponse = StringBuilder()
             val startTime = System.currentTimeMillis()
- 
-            inferenceEngine.analyzeImageStream(jpegBytes, prompt).collect { token ->
+
+            inferenceEngine.analyzeImageStream(task.imageBytes, task.prompt).collect { token ->
                 fullResponse.append(token)
                 _inferenceOutput.value = fullResponse.toString()
             }
@@ -187,7 +218,7 @@ class AssistiveService : Service() {
             performanceMonitor.refreshBatteryDrain()
 
             val finalOutput = fullResponse.toString()
-            val validatedOutput = if (prompt.contains("อ่าน")) {
+            val validatedOutput = if (task.prompt.contains("อ่าน")) {
                 com.assistive.system.ai.OcrPostValidator.validateOcrResult(finalOutput)
             } else {
                 finalOutput
@@ -201,7 +232,10 @@ class AssistiveService : Service() {
 
             // Speak the VLM output
             audioPipeline.speak(validatedOutput) {
-                isAnalyzing = false
+                serviceScope.launch {
+                    isAnalyzing = false
+                    processNextTask()
+                }
             }
         }
     }

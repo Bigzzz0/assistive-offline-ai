@@ -47,6 +47,8 @@ class VisionPipeline(
     private val DOWNSAMPLE_WIDTH = 32
     private val DOWNSAMPLE_HEIGHT = 32
     private val SCENE_DIFF_THRESHOLD = 0.08f // 8% difference threshold
+    private var lastProcessedTime = 0L
+    private val FRAME_INTERVAL_MS = 200L // 5 FPS (200ms)
 
     init {
         registerSensors()
@@ -96,6 +98,13 @@ class VisionPipeline(
 
     fun getAnalyzer(): ImageAnalysis.Analyzer {
         return ImageAnalysis.Analyzer { imageProxy ->
+            val now = System.currentTimeMillis()
+            val frameRequested = isFrameRequested()
+            if (!frameRequested && (now - lastProcessedTime < FRAME_INTERVAL_MS)) {
+                imageProxy.close()
+                return@Analyzer
+            }
+            lastProcessedTime = now
             executor.execute {
                 processImage(imageProxy)
             }
@@ -157,15 +166,18 @@ class VisionPipeline(
         val result = IntArray(DOWNSAMPLE_WIDTH * DOWNSAMPLE_HEIGHT)
         val xStep = width / DOWNSAMPLE_WIDTH
         val yStep = height / DOWNSAMPLE_HEIGHT
+        val capacity = yBuffer.capacity()
 
         for (y in 0 until DOWNSAMPLE_HEIGHT) {
+            val sourceY = y * yStep
+            val rowOffset = sourceY * rowStride
+            val rowTargetIndex = y * DOWNSAMPLE_WIDTH
             for (x in 0 until DOWNSAMPLE_WIDTH) {
                 val sourceX = x * xStep
-                val sourceY = y * yStep
-                val index = sourceY * rowStride + sourceX * pixelStride
-                if (index < yBuffer.capacity()) {
+                val index = rowOffset + sourceX * pixelStride
+                if (index < capacity) {
                     val pixelVal = yBuffer.get(index).toInt() and 0xFF
-                    result[y * DOWNSAMPLE_WIDTH + x] = pixelVal
+                    result[rowTargetIndex + x] = pixelVal
                 }
             }
         }
@@ -201,7 +213,7 @@ class VisionPipeline(
 
         val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
         val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 75, out)
+        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 50, out)
         return out.toByteArray()
     }
 

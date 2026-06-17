@@ -78,7 +78,7 @@ class AudioPipeline(
                     joiner = File(modelDirPath, "joiner.onnx").absolutePath
                 }
                 modelConfig.tokens = File(modelDirPath, "tokens.txt").absolutePath
-                modelConfig.numThreads = 4
+                modelConfig.numThreads = Runtime.getRuntime().availableProcessors().coerceAtMost(4)
                 modelConfig.provider = "cpu"
                 featConfig.sampleRate = 16000
                 featConfig.featureDim = 80
@@ -127,7 +127,9 @@ class AudioPipeline(
             audioRecord?.startRecording()
             recordingThread = thread(start = true) {
                 val buffer = ShortArray(bufferSize)
-                val audioData = mutableListOf<Float>()
+                val maxAudioSamples = 16000 * 10 // Max 10 seconds of audio
+                val audioDataBuffer = FloatArray(maxAudioSamples)
+                var audioDataSize = 0
                 var silenceFrames = 0
                 val maxSilenceFrames = 50 // ~1.0 second of silence at 20ms frames
                 
@@ -136,23 +138,34 @@ class AudioPipeline(
                     if (readBytes > 0) {
                         val floatBuffer = FloatArray(readBytes) { i -> buffer[i] / 32768.0f }
                         
-                        // Calculate energy to check for silence
+                        // Calculate MAE (Mean Absolute Error) to check for silence (avoiding slow sqrt and squaring)
                         var sum = 0.0f
-                        for (x in floatBuffer) sum += x * x
-                        val rms = kotlin.math.sqrt(sum / floatBuffer.size)
+                        for (i in 0 until readBytes) {
+                            sum += kotlin.math.abs(floatBuffer[i])
+                        }
+                        val mae = sum / readBytes
                         
-                        if (rms < 0.01f) {
+                        if (mae < 0.01f) {
                             silenceFrames++
                         } else {
                             silenceFrames = 0
                         }
                         
-                        for (x in floatBuffer) audioData.add(x)
+                        // Copy to primitive array buffer using System.arraycopy
+                        if (audioDataSize + readBytes <= maxAudioSamples) {
+                            System.arraycopy(floatBuffer, 0, audioDataBuffer, audioDataSize, readBytes)
+                            audioDataSize += readBytes
+                        } else {
+                            audioDataSize = 0
+                            silenceFrames = 0
+                        }
                         
                         // If silence detected and we have audio data, decode
-                        if (silenceFrames >= maxSilenceFrames && audioData.size > 16000) {
+                        if (silenceFrames >= maxSilenceFrames && audioDataSize > 16000) {
                             val stream = rec.createStream()
-                            stream.acceptWaveform(audioData.toFloatArray(), sampleRate)
+                            val activeSamples = FloatArray(audioDataSize)
+                            System.arraycopy(audioDataBuffer, 0, activeSamples, 0, audioDataSize)
+                            stream.acceptWaveform(activeSamples, sampleRate)
                             rec.decode(stream)
                             val text = rec.getResult(stream).text.trim().lowercase()
                             if (text.isNotEmpty()) {
@@ -163,13 +176,13 @@ class AudioPipeline(
                                 }
                             }
                             stream.release()
-                            audioData.clear()
+                            audioDataSize = 0
                             silenceFrames = 0
                         }
                         
                         // Limit buffer size to prevent memory leak if continuous noise
-                        if (audioData.size > 16000 * 10) { // Max 10 seconds of audio
-                            audioData.clear()
+                        if (audioDataSize > 16000 * 10) { // Max 10 seconds of audio
+                            audioDataSize = 0
                             silenceFrames = 0
                         }
                     }
@@ -265,6 +278,13 @@ class AudioPipeline(
         } else {
             @Suppress("DEPRECATION")
             audioManager.abandonAudioFocus(null)
+        }
+    }
+
+    fun stopSpeaking() {
+        if (isTtsReady) {
+            tts?.stop()
+            abandonAudioFocus()
         }
     }
 

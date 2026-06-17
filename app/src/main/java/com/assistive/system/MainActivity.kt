@@ -40,6 +40,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.view.KeyEvent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.assistive.system.download.ModelDownloader
@@ -218,10 +221,35 @@ class MainActivity : ComponentActivity() {
         var showDevPanel by remember { mutableStateOf(false) }
         var showModelManager by remember { mutableStateOf(false) }
 
+        var currentMode by remember { mutableStateOf(ActiveMode.OBJECT) }
+        val announceMode = { mode: ActiveMode ->
+            assistiveService?.hapticManager?.vibrateGeneralInfo()
+            assistiveService?.audioPipeline?.speak(mode.speech)
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp)
+                .pointerInput(Unit) {
+                    var totalDrag = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { totalDrag = 0f },
+                        onDragEnd = {
+                            if (totalDrag > 150f) {
+                                currentMode = currentMode.previous()
+                                announceMode(currentMode)
+                            } else if (totalDrag < -150f) {
+                                currentMode = currentMode.next()
+                                announceMode(currentMode)
+                            }
+                        },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            totalDrag += dragAmount
+                        }
+                    )
+                }
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -261,6 +289,46 @@ class MainActivity : ComponentActivity() {
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // ---- Active Mode Banner ----
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(2.dp, Color(0xFF3B82F6)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics {
+                        contentDescription = "โหมดใช้งานสัมผัสปัจจุบัน: ${currentMode.speech}"
+                    }
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        "โหมดใช้งานสัมผัสปัจจุบัน",
+                        color = Color.LightGray,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        currentMode.label,
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "ปัดซ้าย/ขวาเพื่อเปลี่ยน | แตะสองครั้งที่กล้องเพื่อทำงาน",
+                        color = Color(0xFF60A5FA),
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             // ---- Camera Viewport ----
             Box(
                 modifier = Modifier
@@ -268,12 +336,20 @@ class MainActivity : ComponentActivity() {
                     .height(250.dp)
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color.Black)
-                    .clickable {
-                        assistiveService?.hapticManager?.vibrateGeneralInfo()
-                        // Double tap area → trigger analyze immediately
-                        assistiveService?.handleVoiceCommand("ดู")
+                    .pointerInput(currentMode) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                assistiveService?.hapticManager?.vibrateGeneralInfo()
+                                assistiveService?.handleVoiceCommand(currentMode.command)
+                            },
+                            onTap = {
+                                announceMode(currentMode)
+                            }
+                        )
                     }
-                    .semantics { contentDescription = "หน้าต่างกล้อง แตะสองครั้งเพื่อวิเคราะห์ภาพทันที" }
+                    .semantics {
+                        contentDescription = "หน้าต่างกล้อง โหมดปัจจุบันคือ ${currentMode.speech}. แตะสองครั้งเพื่อเริ่มสแกน หรือปัดซ้ายขวาเพื่อเปลี่ยนโหมด"
+                    }
             ) {
                 AndroidView(
                     factory = { ctx ->
@@ -506,7 +582,11 @@ class MainActivity : ComponentActivity() {
         Card(
             colors = CardDefaults.cardColors(containerColor = Color(0xFF0F2039)),
             shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics {
+                    contentDescription = "แผงแสดงประสิทธิภาพการทำงาน ตัวชี้วัดรวม ${metrics.totalInferenceCount} ครั้ง เฉลี่ยครั้งละ ${metrics.averageLatencyMs} มิลลิวินาที"
+                }
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Text(
@@ -516,28 +596,68 @@ class MainActivity : ComponentActivity() {
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                val rows = listOf(
-                    Triple("Inference Latency", "${metrics.lastInferenceLatencyMs} ms", metrics.lastInferenceLatencyMs < 3000),
-                    Triple("Token Rate", "${"%.1f".format(metrics.tokenRatePerSec)} t/s", metrics.tokenRatePerSec >= 8f || !metrics.isVlmReal),
-                    Triple("Memory Usage", "${metrics.memoryUsageMB} MB", metrics.memoryUsageMB < 4000),
-                    Triple("Temperature", "${"%.0f".format(metrics.temperatureCelsius)} °C", metrics.temperatureCelsius < 45f),
-                    Triple("Battery Drain", "${"%.1f".format(metrics.batteryDrainMahPerMin)} mAh/min", metrics.batteryDrainMahPerMin < 15f),
-                    Triple("Total Inferences", "${metrics.totalInferenceCount} (avg ${metrics.averageLatencyMs}ms)", true)
+
+                // Inference Latency
+                PerformanceMetricRow(
+                    label = "Inference Latency",
+                    valueText = "${metrics.lastInferenceLatencyMs} ms",
+                    progress = (metrics.lastInferenceLatencyMs / 5000f).coerceIn(0f, 1f),
+                    color = if (metrics.lastInferenceLatencyMs < 3000) Color(0xFF10B981) else Color(0xFFEF4444),
+                    contentDescription = "เวลาประมวลผลเอไอภาพล่าสุด: ${metrics.lastInferenceLatencyMs} มิลลิวินาที, สถานะ: ${if (metrics.lastInferenceLatencyMs < 3000) "ปกติ" else "ช้ากว่าปกติ"}"
                 )
-                rows.forEach { (label, value, ok) ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(label, color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        Text(
-                            "${if (ok) "✅" else "❌"} $value",
-                            color = if (ok) Color(0xFF10B981) else Color(0xFFEF4444),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
+
+                // Token Rate
+                PerformanceMetricRow(
+                    label = "Token Rate",
+                    valueText = "${"%.1f".format(metrics.tokenRatePerSec)} t/s",
+                    progress = (metrics.tokenRatePerSec / 15f).coerceIn(0f, 1f),
+                    color = if (metrics.tokenRatePerSec >= 8f || !metrics.isVlmReal) Color(0xFF10B981) else Color(0xFFF59E0B),
+                    contentDescription = "ความเร็วสร้างข้อความท็อกเกน: ${"%.1f".format(metrics.tokenRatePerSec)} ท็อกเกนต่อวินาที"
+                )
+
+                // Memory Usage
+                PerformanceMetricRow(
+                    label = "Memory Usage",
+                    valueText = "${metrics.memoryUsageMB} MB",
+                    progress = (metrics.memoryUsageMB / 6000f).coerceIn(0f, 1f),
+                    color = if (metrics.memoryUsageMB < 4000) Color(0xFF10B981) else Color(0xFFEF4444),
+                    contentDescription = "ปริมาณการใช้หน่วยความจำแรม: ${metrics.memoryUsageMB} เมกะไบต์"
+                )
+
+                // Temperature
+                PerformanceMetricRow(
+                    label = "Temperature",
+                    valueText = "${"%.0f".format(metrics.temperatureCelsius)} °C",
+                    progress = (metrics.temperatureCelsius / 60f).coerceIn(0f, 1f),
+                    color = if (metrics.temperatureCelsius < 45f) Color(0xFF10B981) else if (metrics.temperatureCelsius < 55f) Color(0xFFF59E0B) else Color(0xFFEF4444),
+                    contentDescription = "อุณหภูมิหน่วยประมวลผล: ${"%.0f".format(metrics.temperatureCelsius)} องศาเซลเซียส, สถานะ: ${if (metrics.temperatureCelsius < 45f) "ปกติ" else "ร้อนกว่าปกติ"}"
+                )
+
+                // Battery Drain
+                PerformanceMetricRow(
+                    label = "Battery Drain",
+                    valueText = "${"%.1f".format(metrics.batteryDrainMahPerMin)} mAh/min",
+                    progress = (metrics.batteryDrainMahPerMin / 20f).coerceIn(0f, 1f),
+                    color = if (metrics.batteryDrainMahPerMin < 15f) Color(0xFF10B981) else Color(0xFFEF4444),
+                    contentDescription = "อัตราสิ้นเปลืองพลังงานแบตเตอรี่: ${"%.1f".format(metrics.batteryDrainMahPerMin)} มิลลิแอมป์ต่อนาที"
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {
+                        contentDescription = "การประมวลผลรวมทั้งหมด ${metrics.totalInferenceCount} ครั้ง ค่าเฉลี่ย ${metrics.averageLatencyMs} มิลลิวินาที"
+                    },
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Total Inferences", color = Color.LightGray, fontSize = 12.sp)
+                    Text(
+                        "${metrics.totalInferenceCount} (avg ${metrics.averageLatencyMs}ms)",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
+
                 HorizontalDivider(color = Color.Gray.copy(alpha = 0.3f), modifier = Modifier.padding(vertical = 6.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("VLM: ${if (metrics.isVlmReal) "Gemma Real ✅" else "Mock ⚠️"}", color = Color.LightGray, fontSize = 11.sp)
@@ -757,5 +877,60 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+}
+
+enum class ActiveMode(val label: String, val speech: String, val command: String) {
+    READ("📖 อ่านหนังสือ (OCR)", "โหมดอ่านหนังสือ", "อ่าน"),
+    OBJECT("👁️ หาวัตถุบนโต๊ะ", "โหมดหาวัตถุ", "ดู"),
+    OBSTACLE("🚧 ตรวจสิ่งกีดขวาง", "โหมดตรวจจับสิ่งกีดขวาง", "ข้างหน้า");
+
+    fun next(): ActiveMode = when (this) {
+        READ -> OBJECT
+        OBJECT -> OBSTACLE
+        OBSTACLE -> READ
+    }
+
+    fun previous(): ActiveMode = when (this) {
+        READ -> OBSTACLE
+        OBJECT -> READ
+        OBSTACLE -> OBJECT
+    }
+}
+
+@Composable
+fun PerformanceMetricRow(
+    label: String,
+    valueText: String,
+    progress: Float,
+    color: Color,
+    contentDescription: String
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .semantics(mergeDescendants = true) {
+                this.contentDescription = contentDescription
+            }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(label, color = Color.LightGray, fontSize = 12.sp)
+            Text(valueText, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        LinearProgressIndicator(
+            progress = { progress },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp)),
+            color = color,
+            trackColor = Color.White.copy(alpha = 0.1f)
+        )
     }
 }

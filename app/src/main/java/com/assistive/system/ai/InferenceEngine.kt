@@ -77,7 +77,27 @@ class InferenceEngine(
                 Log.i("InferenceEngine", "LoRA adapter detected at $loraAdapterPath")
             }
 
-            // 1. Try GPU first
+            // 1. Try NPU first
+            try {
+                Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on NPU...")
+                val config = EngineConfig(
+                    modelPath = modelPath,
+                    backend = Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir),
+                    visionBackend = Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir),
+                    cacheDir = context.cacheDir.absolutePath
+                )
+                val npuEngine = Engine(config)
+                npuEngine.initialize()
+                engine = npuEngine
+                isInitialized = true
+                isMockMode = false
+                Log.i("InferenceEngine", "LiteRT-LM Engine initialized successfully with NPU acceleration.")
+                return@withContext true
+            } catch (e: Exception) {
+                Log.e("InferenceEngine", "NPU initialization failed: ${e.message}. Falling back to GPU.", e)
+            }
+
+            // 2. Try GPU second
             try {
                 Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on GPU...")
                 val config = EngineConfig(
@@ -169,10 +189,16 @@ class InferenceEngine(
                 conversation.sendMessageAsync(contents).collect { token ->
                     val tokenStr = token.toString()
                     responseBuilder.append(tokenStr)
-                    val currentText = responseBuilder.toString()
-                    if (currentText.contains("ความมั่นใจ: ต่ำ") || currentText.contains("ความมั่นใจ:ต่ำ")) {
-                        isLowConfidence = true
+                    
+                    val length = responseBuilder.length
+                    if (length >= 12) {
+                        val startIndex = (length - 30).coerceAtLeast(0)
+                        val lastChunk = responseBuilder.substring(startIndex)
+                        if (lastChunk.contains("ความมั่นใจ: ต่ำ") || lastChunk.contains("ความมั่นใจ:ต่ำ")) {
+                            isLowConfidence = true
+                        }
                     }
+                    
                     if (!isLowConfidence) {
                         emit(tokenStr)
                     }
