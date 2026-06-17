@@ -743,6 +743,7 @@ class MainActivity : ComponentActivity() {
                                     isDownloading = true
                                     coroutineScope.launch {
                                         val files = listOf(
+                                            ModelFile.ASR_ENCODER,
                                             ModelFile.ASR_DECODER,
                                             ModelFile.ASR_JOINER,
                                             ModelFile.ASR_TOKENS

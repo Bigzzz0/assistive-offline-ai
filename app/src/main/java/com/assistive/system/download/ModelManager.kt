@@ -9,8 +9,16 @@ import java.io.File
  */
 class ModelManager(private val context: Context) {
 
-    // Base dirs
-    val vlmModelFile: File get() = File(context.filesDir, "gemma_vlm.litertlm")
+    // Base dirs — support both HuggingFace download name and legacy name
+    val vlmModelFile: File get() {
+        val primary = File(context.filesDir, "gemma-4-E2B-it.litertlm")
+        val legacy  = File(context.filesDir, "gemma_vlm.litertlm")
+        return when {
+            primary.exists() -> primary
+            legacy.exists()  -> legacy
+            else             -> primary
+        }
+    }
     val asrModelDir: File get() = File(context.filesDir, "sherpa-onnx-thai")
 
     // Required ASR files

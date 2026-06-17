@@ -37,17 +37,22 @@ enum ActiveMode: String, CaseIterable {
 
 struct ContentView: View {
     @State private var currentMode: ActiveMode = .object
-    @State private var statusText: String = "ระบบพร้อมทำงาน (Real Mode ✅)"
+    @State private var statusText: String = "กำลังเริ่มต้นระบบ..."
     @State private var aiResultText: String = ""
     @State private var showDevPanel: Bool = false
-    @State private var lastLatencyMs: Int = 1850
+    @State private var lastLatencyMs: Int = 0
+    @State private var isProcessing: Bool = false
+    
+    // Camera permission state
+    @State private var cameraAuthorized: Bool = false
+    @State private var cameraSessionStarted: Bool = false
     
     // Performance Mock Metrics for UI presentation
-    @State private var memoryUsageMB: Float = 1420.0
-    @State private var cpuTempCelsius: Float = 38.0
-    @State private var batteryDrain: Float = 4.2
-    @State private var totalInferences: Int = 14
-    @State private var averageLatencyMs: Int = 1920
+    @State private var memoryUsageMB: Float = 0
+    @State private var cpuTempCelsius: Float = 0
+    @State private var batteryDrain: Float = 0
+    @State private var totalInferences: Int = 0
+    @State private var averageLatencyMs: Int = 0
     
     var body: some View {
         ScrollView {
@@ -58,12 +63,12 @@ struct ContentView: View {
                         .font(.system(size: 20, weight: .bold))
                         .foregroundColor(.white)
                     Spacer()
-                    Text("✅ Real Mode")
+                    Text(InferenceEngine.shared.isMock() ? "⚠️ Mock" : "✅ Real Mode")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
-                        .background(Color.green)
+                        .background(InferenceEngine.shared.isMock() ? Color.gray : Color.green)
                         .cornerRadius(16)
                 }
                 .padding(.top, 10)
@@ -92,24 +97,26 @@ struct ContentView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("โหมดใช้งานสัมผัสปัจจุบันคือ \(currentMode.speech)")
                 
-                // ---- Camera Viewport Mock ----
+                // ---- Live Camera Viewport ----
                 ZStack {
-                    Color.black
-                    
-                    // Simple text indicator instead of AVPlayer for compiler safety
-                    VStack {
-                        Image(systemName: "camera.fill")
-                            .font(.system(size: 40))
-                            .foregroundColor(.gray)
-                        Text("[ หน้าต่างแสดงภาพถ่าย ]")
-                            .font(.system(size: 12))
-                            .foregroundColor(.gray)
-                            .padding(.top, 4)
+                    if cameraAuthorized, let session = VisionPipeline.shared.session {
+                        CameraPreviewView(session: session)
+                    } else {
+                        Color.black
+                        VStack {
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 40))
+                                .foregroundColor(.gray)
+                            Text(cameraAuthorized ? "กำลังเตรียมกล้อง..." : "กรุณาอนุญาตการใช้กล้อง")
+                                .font(.system(size: 12))
+                                .foregroundColor(.gray)
+                                .padding(.top, 4)
+                        }
                     }
                     
                     VStack {
                         Spacer()
-                        Text("แตะสองครั้งเพื่อวิเคราะห์ภาพ")
+                        Text(isProcessing ? "กำลังประมวลผล..." : "แตะสองครั้งเพื่อวิเคราะห์ภาพ")
                             .font(.system(size: 12))
                             .foregroundColor(.white.opacity(0.7))
                             .padding(.horizontal, 8)
@@ -294,23 +301,73 @@ struct ContentView: View {
                 }
             }
         )
+        .onAppear {
+            requestCameraPermission()
+            _ = InferenceEngine.shared.initialize()
+            statusText = "ระบบพร้อมทำงาน"
+        }
     }
     
-    // Action helper methods
+    // MARK: - Camera Permission
+    
+    private func requestCameraPermission() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            cameraAuthorized = true
+            startCameraIfNeeded()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                DispatchQueue.main.async {
+                    cameraAuthorized = granted
+                    if granted {
+                        startCameraIfNeeded()
+                    }
+                }
+            }
+        default:
+            cameraAuthorized = false
+        }
+    }
+    
+    private func startCameraIfNeeded() {
+        guard !cameraSessionStarted else { return }
+        cameraSessionStarted = true
+        VisionPipeline.shared.startSession()
+    }
+    
+    // MARK: - Actions
+    
     private func triggerCommand(_ command: String) {
+        guard !isProcessing else { return }
+        isProcessing = true
         vibrateHaptic(level: 1)
         speakText("กำลังทำคำสั่ง \(command)")
         statusText = "กำลังวิเคราะห์ภาพ..."
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            statusText = "ระบบพร้อมทำงาน"
-            aiResultText = getMockResponse(command: command)
-            speakText(aiResultText)
+        let startTime = Date()
+        
+        // Capture current frame from the live camera
+        VisionPipeline.shared.captureCurrentFrame { jpegData in
+            guard let jpegData = jpegData else {
+                // No camera data — use mock
+                self.statusText = "ไม่สามารถจับภาพจากกล้องได้"
+                self.aiResultText = "กรุณาอนุญาตการใช้กล้องและลองอีกครั้ง"
+                self.speakText(self.aiResultText)
+                self.isProcessing = false
+                return
+            }
             
-            // Adjust mock stats
-            totalInferences += 1
-            lastLatencyMs = Int.random(in: 1500...2200)
-            vibrateHaptic(level: 2)
+            // Route to InferenceEngine (real OCR for read mode, simulated for others)
+            InferenceEngine.shared.analyzeImage(jpegData: jpegData, promptText: command, onToken: { _ in }) { result in
+                let elapsed = Int(Date().timeIntervalSince(startTime) * 1000)
+                self.lastLatencyMs = elapsed
+                self.totalInferences += 1
+                self.aiResultText = result
+                self.statusText = "ระบบพร้อมทำงาน (\(elapsed)ms)"
+                self.speakText(result)
+                self.vibrateHaptic(level: 2)
+                self.isProcessing = false
+            }
         }
     }
     
@@ -333,16 +390,6 @@ struct ContentView: View {
         } else {
             let generator = UIImpactFeedbackGenerator(style: .medium)
             generator.impactOccurred()
-        }
-    }
-    
-    private func getMockResponse(command: String) -> String {
-        if command.contains("อ่าน") {
-            return "ป้ายทางหนีไฟสีเขียวประตูด้านขวา (ความมั่นใจ: สูง)"
-        } else if command.contains("ดู") {
-            return "แก้วน้ำและกุญแจอยู่ตรงกลางโต๊ะทำงาน (ความมั่นใจ: สูง)"
-        } else {
-            return "เก้าอี้ไม้ขวางทางเดินด้านหน้าหนึ่งเมตร (ความมั่นใจ: สูง)"
         }
     }
 }

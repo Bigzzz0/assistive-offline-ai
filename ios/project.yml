@@ -17,3 +17,5 @@ targets:
       - sdk: AVFoundation.framework
       - sdk: AudioToolbox.framework
       - sdk: CoreHaptics.framework
+      - sdk: Vision.framework
+

@@ -18,7 +18,16 @@ import java.io.File
 
 class InferenceEngine(
     private val context: Context,
-    private val modelPath: String = context.filesDir.absolutePath + "/gemma_vlm.litertlm",
+    private val modelPath: String = run {
+        // Prioritize HuggingFace download name, fall back to legacy name
+        val primary = File(context.filesDir, "gemma-4-E2B-it.litertlm")
+        val legacy  = File(context.filesDir, "gemma_vlm.litertlm")
+        when {
+            primary.exists() -> primary.absolutePath
+            legacy.exists()  -> legacy.absolutePath
+            else             -> primary.absolutePath // default path for error messages
+        }
+    },
     private val loraAdapterPath: String? = run {
         val loraDir = File(context.filesDir, "lora_adapter")
         if (loraDir.exists()) loraDir.absolutePath else null
