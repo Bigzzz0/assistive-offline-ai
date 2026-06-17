@@ -651,6 +651,41 @@ struct ContentView: View {
         }
     }
     
+    private func handleModeChange(to newMode: ActiveMode) {
+        VisionPipeline.shared.activeMode = newMode
+        
+        // Stop any running special sessions
+        ARDepthPipeline.shared.stopSession()
+        AudioPipeline.shared.stopTone()
+        #if canImport(RoomPlan)
+        RoomPlanManager.shared.stopSession()
+        #endif
+        
+        if newMode == .roomPlan {
+            VisionPipeline.shared.stopSession()
+            #if canImport(RoomPlan)
+            if DeviceCapabilities.supportsLiDAR() {
+                RoomPlanManager.shared.startSession()
+            } else {
+                speakText("อุปกรณ์นี้ไม่รองรับระบบไลดาร์ สลับเป็นโหมดจำลองสิ่งกีดขวาง")
+                aiResultText = "อุปกรณ์ไม่รองรับ LiDAR จะทำงานในโหมดจำลองสิ่งกีดขวางแบบออฟไลน์"
+            }
+            #else
+            speakText("ระบบปฏิบัติการนี้ไม่รองรับรูมแพลน สลับเป็นโหมดจำลองสิ่งกีดขวาง")
+            aiResultText = "ไม่รองรับ RoomPlan ในเวอร์ชันนี้ จะทำงานในโหมดจำลองสิ่งกีดขวางแบบออฟไลน์"
+            #endif
+        } else if newMode == .peopleDetection {
+            VisionPipeline.shared.stopSession()
+            ARDepthPipeline.shared.startSession()
+        } else {
+            if VisionPipeline.shared.session == nil || !VisionPipeline.shared.session!.isRunning {
+                VisionPipeline.shared.startSession()
+            }
+        }
+        
+        announceMode()
+    }
+
     private func announceMode() {
         vibrateHaptic(level: 1)
         speakText(currentMode.speech)
