@@ -40,12 +40,16 @@ struct ContentView: View {
     @State private var statusText: String = "กำลังเริ่มต้นระบบ..."
     @State private var aiResultText: String = ""
     @State private var showDevPanel: Bool = false
+    @State private var showModelManager: Bool = false
+    @State private var isMockMode: Bool = true
     @State private var lastLatencyMs: Int = 0
     @State private var isProcessing: Bool = false
     
     // Camera permission state
     @State private var cameraAuthorized: Bool = false
     @State private var cameraSessionStarted: Bool = false
+    
+    @ObservedObject private var downloader = IOSModelDownloader.shared
     
     // Performance Mock Metrics for UI presentation
     @State private var memoryUsageMB: Float = 0
@@ -63,12 +67,12 @@ struct ContentView: View {
                         .font(.system(size: 20, weight: .bold))
                         .foregroundColor(.white)
                     Spacer()
-                    Text(InferenceEngine.shared.isMock() ? "⚠️ Mock" : "✅ Real Mode")
+                    Text(isMockMode ? "⚠️ Mock" : "✅ Real Mode")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
-                        .background(InferenceEngine.shared.isMock() ? Color.gray : Color.green)
+                        .background(isMockMode ? Color.gray : Color.green)
                         .cornerRadius(16)
                 }
                 .padding(.top, 10)
@@ -225,17 +229,134 @@ struct ContentView: View {
                     .accessibilityLabel("ปุ่มตรวจสอบสิ่งกีดขวางทางเดินด้านหน้า")
                 }
                 
-                // ---- Dev Panel Button ----
-                Button(action: {
-                    showDevPanel.toggle()
-                    vibrateHaptic(level: 1)
-                }) {
-                    Text(showDevPanel ? "ซ่อนแผงผู้พัฒนา" : "📊 Dev Panel")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.blue)
-                        .padding()
-                        .frame(maxWidth: .infinity)
-                        .background(RoundedRectangle(cornerRadius: 8).stroke(Color.blue, lineWidth: 1))
+                // ---- Dev Panel + Model Manager toggles ----
+                HStack(spacing: 8) {
+                    Button(action: {
+                        showDevPanel.toggle()
+                        vibrateHaptic(level: 1)
+                    }) {
+                        Text(showDevPanel ? "ซ่อน Dev" : "📊 Dev Panel")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.blue)
+                            .padding()
+                            .frame(maxWidth: .infinity)
+                            .background(RoundedRectangle(cornerRadius: 8).stroke(Color.blue, lineWidth: 1))
+                    }
+                    
+                    Button(action: {
+                        showModelManager.toggle()
+                        vibrateHaptic(level: 1)
+                    }) {
+                        Text(showModelManager ? "ซ่อนโมเดล" : "⬇️ จัดการโมเดล")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.blue)
+                            .padding()
+                            .frame(maxWidth: .infinity)
+                            .background(RoundedRectangle(cornerRadius: 8).stroke(Color.blue, lineWidth: 1))
+                    }
+                }
+                
+                // ---- Model Manager Panel ----
+                if showModelManager {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("⬇️ จัดการโมเดล AI")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(.white)
+                        
+                        let isVlmReady = IOSModelFile.vlm.isDownloaded
+                        let vlmSizeMB = Double(IOSModelFile.vlm.downloadedSize) / 1_048_576.0
+                        
+                        HStack {
+                            Text("📦 VLM (Gemma 4 E2B):")
+                                .font(.system(size: 13))
+                                .foregroundColor(.gray)
+                            Spacer()
+                            Text(isVlmReady ? String(format: "✅ พร้อม (%.1f MB)", vlmSizeMB) : "❌ ยังไม่ได้โหลด")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundColor(isVlmReady ? .green : .red)
+                        }
+                        
+                        let freeSpace = availableSpaceMB()
+                        Text("💾 พื้นที่ว่าง: \(freeSpace) MB")
+                            .font(.system(size: 12))
+                            .foregroundColor(.gray)
+                        
+                        Divider().background(Color.gray.opacity(0.3))
+                        
+                        if downloader.isDownloading {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ProgressView(value: downloader.progress)
+                                    .accentColor(.blue)
+                                Text(downloader.statusMessage)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.gray)
+                                
+                                Button(action: {
+                                    downloader.cancelDownload()
+                                    vibrateHaptic(level: 1)
+                                }) {
+                                    Text("ยกเลิกการดาวน์โหลด")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundColor(.red)
+                                        .padding(.vertical, 8)
+                                        .frame(maxWidth: .infinity)
+                                        .background(RoundedRectangle(cornerRadius: 6).stroke(Color.red, lineWidth: 1))
+                                }
+                            }
+                        } else {
+                            if !isVlmReady {
+                                Button(action: {
+                                    downloader.startDownload(.vlm)
+                                    vibrateHaptic(level: 1)
+                                }) {
+                                    Text("⬇️ ดาวน์โหลด Gemma 4 Model (~1.5 GB)")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 44)
+                                        .background(Color.blue)
+                                        .cornerRadius(8)
+                                }
+                            } else {
+                                Button(action: {
+                                    downloader.deleteModel(.vlm)
+                                    isMockMode = InferenceEngine.shared.initialize() ? InferenceEngine.shared.isMock() : true
+                                    vibrateHaptic(level: 1)
+                                }) {
+                                    Text("🗑️ ลบโมเดล Gemma 4")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 44)
+                                        .background(Color.red)
+                                        .cornerRadius(8)
+                                }
+                            }
+                        }
+                        
+                        if let error = downloader.error {
+                            Text(error)
+                                .font(.system(size: 11))
+                                .foregroundColor(.red)
+                        }
+                        
+                        Button(action: {
+                            isMockMode = InferenceEngine.shared.initialize() ? InferenceEngine.shared.isMock() : true
+                            vibrateHaptic(level: 1)
+                        }) {
+                            Text("🔄 โหลดโมเดลใหม่")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 44)
+                                .background(Color.green)
+                                .cornerRadius(8)
+                        }
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(Color(red: 0.1, green: 0.15, blue: 0.27))
+                    .cornerRadius(12)
                 }
                 
                 // ---- Performance Panel ----
@@ -303,8 +424,13 @@ struct ContentView: View {
         )
         .onAppear {
             requestCameraPermission()
-            _ = InferenceEngine.shared.initialize()
+            isMockMode = InferenceEngine.shared.initialize() ? InferenceEngine.shared.isMock() : true
             statusText = "ระบบพร้อมทำงาน"
+        }
+        .onChange(of: downloader.isComplete) { isComplete in
+            if isComplete {
+                isMockMode = InferenceEngine.shared.initialize() ? InferenceEngine.shared.isMock() : true
+            }
         }
     }
     
@@ -378,6 +504,17 @@ struct ContentView: View {
     
     private func speakText(_ text: String) {
         AudioPipeline.shared.speak(text)
+    }
+    
+    private func availableSpaceMB() -> Int64 {
+        let path = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? NSHomeDirectory()
+        do {
+            let systemAttributes = try FileManager.default.attributesOfFileSystem(forPath: path)
+            if let freeSpace = systemAttributes[.systemFreeSize] as? Int64 {
+                return freeSpace / 1_048_576 // Convert to MB
+            }
+        } catch {}
+        return 0
     }
     
     private func vibrateHaptic(level: Int) {
