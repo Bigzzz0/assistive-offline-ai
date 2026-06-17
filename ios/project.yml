@@ -4,7 +4,7 @@ options:
 packages:
   LiteRTLM:
     url: https://github.com/google-ai-edge/LiteRT-LM
-    from: "0.13.0"
+    revision: a0afb5a56acd106b23a2b2385b8469834dc268c0
 targets:
   AssistiveApp:
     type: application
