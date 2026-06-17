@@ -1,6 +1,10 @@
 name: AssistiveApp
 options:
   bundleIdPrefix: com.assistive.system
+packages:
+  LiteRTLM:
+    url: https://github.com/google-ai-edge/LiteRT-LM
+    from: "0.13.0"
 targets:
   AssistiveApp:
     type: application
@@ -18,3 +22,4 @@ targets:
       - sdk: AudioToolbox.framework
       - sdk: CoreHaptics.framework
       - sdk: Vision.framework
+      - package: LiteRTLM

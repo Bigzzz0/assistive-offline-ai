@@ -1,6 +1,7 @@
 import Foundation
 import Vision
 import UIKit
+import LiteRTLM
 
 class InferenceEngine {
     static let shared = InferenceEngine()
@@ -8,6 +9,9 @@ class InferenceEngine {
     private var isInitialized = false
     private var isMockMode = true
     private var modelURL: URL?
+    
+    private var engine: Engine?
+    private var conversation: Conversation?
     
     // System Prompt to enforce constraint decoding format (Thai BLV Assistant)
     private let systemPrompt = """
@@ -40,37 +44,30 @@ class InferenceEngine {
         }
         
         if !isMockMode, let url = modelURL {
-            // ─── Gemma 4 VLM Engine Configuration (Section 5.3) ───
-            // When LiteRT-LM Swift SDK becomes available:
-            //
-            // let config = LiteRTLMEngineConfig(
-            //     modelPath: url.path,
-            //     backend: .ane,          // Apple Neural Engine (NPU) — primary
-            //     visionBackend: .metal,  // Metal GPU — for vision encoder
-            //     cacheDir: FileManager.default.temporaryDirectory.path,
-            //     maxTokens: 256,
-            //     constraintDecoding: true // Enforce structured Thai output
-            // )
-            //
-            // Fallback chain: ANE → Metal GPU → CPU
-            // do {
-            //     engine = try LiteRTLMEngine(config: config)
-            //     engine.initialize()
-            // } catch {
-            //     // Fallback to Metal GPU
-            //     config.backend = .metal
-            //     engine = try LiteRTLMEngine(config: config)
-            // }
-            //
-            // LoRA Adapter loading:
-            // let loraURL = documentsDirectory.appendingPathComponent("lora_adapter")
-            // if fileManager.fileExists(atPath: loraURL.path) {
-            //     engine.loadLoRAAdapter(path: loraURL.path)
-            // }
-            
-            print("[InferenceEngine] Gemma 4 model found at: \(url.path)")
-            print("[InferenceEngine] ANE/Metal backend configured (awaiting LiteRT-LM Swift SDK)")
-            // Until SDK is available, VLM modes remain simulated but OCR is real
+            print("[InferenceEngine] Gemma 4 model found at: \(url.path). Configuring LiteRT-LM Engine...")
+            do {
+                let config = try EngineConfig(
+                    modelPath: url.path,
+                    backend: .gpu,
+                    cacheDir: FileManager.default.temporaryDirectory.path
+                )
+                let engineInstance = Engine(engineConfig: config)
+                self.engine = engineInstance
+                
+                Task {
+                    do {
+                        try await engineInstance.initialize()
+                        self.conversation = try await engineInstance.createConversation()
+                        print("[InferenceEngine] LiteRT-LM Engine & Conversation initialized successfully.")
+                    } catch {
+                        print("[InferenceEngine] Failed to initialize LiteRT-LM: \(error.localizedDescription)")
+                        self.isMockMode = true
+                    }
+                }
+            } catch {
+                print("[InferenceEngine] Failed to create EngineConfig: \(error.localizedDescription)")
+                self.isMockMode = true
+            }
         }
         
         isInitialized = true
@@ -155,17 +152,7 @@ class InferenceEngine {
     
     // MARK: - VLM Image Analysis (Mock + Real stubs)
     
-    func analyzeImage(jpegData: Data, promptText: String, onToken: @escaping (String) -> Void, completion: @escaping (String) -> Void) {
-        // ── OCR mode uses real Vision framework ──
-        if promptText.contains("อ่าน") {
-            performOCR(jpegData: jpegData) { result in
-                onToken(result)
-                completion(result)
-            }
-            return
-        }
-        
-        // ── VLM modes (object/obstacle): simulated until LiteRT-LM Swift SDK available ──
+    private func runMockVLM(promptText: String, onToken: @escaping (String) -> Void, completion: @escaping (String) -> Void) {
         DispatchQueue.global().async {
             Thread.sleep(forTimeInterval: 1.2)
             let mockResponse: String
@@ -191,5 +178,66 @@ class InferenceEngine {
                 completion(accumulated)
             }
         }
+    }
+    
+    func analyzeImage(jpegData: Data, promptText: String, onToken: @escaping (String) -> Void, completion: @escaping (String) -> Void) {
+        // ── OCR mode uses real Vision framework ──
+        if promptText.contains("อ่าน") {
+            performOCR(jpegData: jpegData) { result in
+                onToken(result)
+                completion(result)
+            }
+            return
+        }
+        
+        // ── VLM modes (object/obstacle) ──
+        if !isMockMode, let conversation = self.conversation {
+            // Write JPEG to temporary file
+            let tempFileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jpg")
+            do {
+                try jpegData.write(to: tempFileURL)
+            } catch {
+                print("[InferenceEngine] VLM temp write error: \(error.localizedDescription)")
+                runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
+                return
+            }
+            
+            Task {
+                do {
+                    let prompt = "\(systemPrompt)\n\nคำสั่ง: \(promptText)"
+                    let message = Message(contents: [
+                        Content.imageFile(tempFileURL.path),
+                        Content.text(prompt)
+                    ])
+                    
+                    var accumulatedText = ""
+                    
+                    // streamMessage returns an AsyncThrowingStream of chunks
+                    for try await chunk in conversation.streamMessage(message) {
+                        let textChunk = "\(chunk)"
+                        accumulatedText += textChunk
+                        DispatchQueue.main.async {
+                            onToken(textChunk)
+                        }
+                    }
+                    
+                    // Clean up temp file
+                    try? FileManager.default.removeItem(at: tempFileURL)
+                    
+                    DispatchQueue.main.async {
+                        completion(accumulatedText)
+                    }
+                } catch {
+                    print("[InferenceEngine] Real VLM inference error: \(error.localizedDescription)")
+                    try? FileManager.default.removeItem(at: tempFileURL)
+                    // Fallback to mock response if local model fails during execution
+                    runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
+                }
+            }
+            return
+        }
+        
+        // Fallback to mock VLM
+        runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
     }
 }
