@@ -24,4 +24,6 @@ targets:
       - sdk: AudioToolbox.framework
       - sdk: CoreHaptics.framework
       - sdk: Vision.framework
+      - sdk: ARKit.framework
+      - sdk: RoomPlan.framework
       - package: LiteRTLM

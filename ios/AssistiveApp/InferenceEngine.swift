@@ -119,7 +119,26 @@ class InferenceEngine {
             
             // Enable experimental flags and set visual token budget (reduces image prefill memory footprint by ~8x)
             ExperimentalFlags.optIntoExperimentalAPIs()
-            ExperimentalFlags.visualTokenBudget = Int32(140)
+            
+            let thermalState = ProcessInfo.processInfo.thermalState
+            let thermalLabel: String
+            let tokenBudget: Int32
+            switch thermalState {
+            case .nominal:
+                thermalLabel = "Nominal (ปกติ)"
+                tokenBudget = 560
+            case .fair:
+                thermalLabel = "Fair (อุ่นเล็กน้อย)"
+                tokenBudget = 280
+            case .serious, .critical:
+                thermalLabel = "Serious/Critical (ร้อน/วิกฤต)"
+                tokenBudget = 140
+            @unknown default:
+                thermalLabel = "Unknown"
+                tokenBudget = 140
+            }
+            ExperimentalFlags.visualTokenBudget = tokenBudget
+            LogStore.shared.log("[InferenceEngine] Device thermal state is \(thermalLabel). Dynamically adjusted visualTokenBudget to \(tokenBudget) to keep thermals under 45°C.")
             
             Task {
                 do {

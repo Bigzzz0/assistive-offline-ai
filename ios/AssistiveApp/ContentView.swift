@@ -208,7 +208,7 @@ struct ContentView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("คำอธิบายภาพจากเอไอ: \(aiResultText.isEmpty ? "ยังไม่มีคำอธิบาย แตะที่หน้าจอเพื่อวิเคราะห์" : aiResultText)")
                 
-                // ---- Stacked Action Buttons ----
+// ---- Stacked Action Buttons ----
                 VStack(spacing: 12) {
                     Button(action: { triggerCommand("อ่าน") }) {
                         Text("📖 อ่านข้อความ (OCR)")
@@ -245,9 +245,8 @@ struct ContentView: View {
                     
                     Button(action: {
                         currentMode = .pointAndSpeak
-                        announceMode()
                     }) {
-                        Text("👉 ชี้แล้วอ่าน (Point & Speak)")
+                        Text("👉 ชี้นิ้วแล้วอ่าน (Point & Speak)")
                             .font(.system(size: 18, weight: .bold))
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
@@ -255,9 +254,34 @@ struct ContentView: View {
                             .background(Color.purple)
                             .cornerRadius(12)
                     }
-                    .accessibilityLabel("ปุ่มโหมดชี้แล้วอ่าน ยื่นนิ้วชี้ไปเพื่ออ่านตัวหนังสือใต้ปลายนิ้ว")
+                    .accessibilityLabel("ปุ่มชี้นิ้วแล้วอ่านข้อความที่ปลายนิ้วสัมผัส")
+                    
+                    Button(action: {
+                        currentMode = .peopleDetection
+                    }) {
+                        Text("👤 เตือนระยะคน (People Alert)")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 60)
+                            .background(Color.pink)
+                            .cornerRadius(12)
+                    }
+                    .accessibilityLabel("ปุ่มเตือนระยะห่างคนรอบตัวด้วยเสียงและการสั่น")
+                    
+                    Button(action: {
+                        currentMode = .roomPlan
+                    }) {
+                        Text("🪑 ค้นหาเก้าอี้และประตู (LiDAR)")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 60)
+                            .background(Color.teal)
+                            .cornerRadius(12)
+                    }
+                    .accessibilityLabel("ปุ่มค้นหาเก้าอี้และประตูรอบตัวโดยใช้ไรดาร์สแกน")
                 }
-                
                 // ---- Dev Panel + Model Manager toggles ----
                 HStack(spacing: 8) {
                     Button(action: {
@@ -535,10 +559,10 @@ struct ContentView: View {
             requestCameraPermission()
             isMockMode = InferenceEngine.shared.initialize() ? InferenceEngine.shared.isMock() : true
             statusText = "ระบบพร้อมทำงาน"
-            VisionPipeline.shared.activeMode = currentMode
+            handleModeChange(to: currentMode)
         }
         .onChange(of: currentMode) { newMode in
-            VisionPipeline.shared.activeMode = newMode
+            handleModeChange(to: newMode)
         }
         .onChange(of: downloader.isComplete) { isComplete in
             if isComplete {
