@@ -72,6 +72,10 @@ class InferenceEngine {
         if !isMockMode, let url = modelURL {
             LogStore.shared.log("[InferenceEngine] Gemma 4 model found at: \(url.path). Configuring LiteRT-LM Engine...")
             
+            // Enable experimental flags and set visual token budget (reduces image prefill memory footprint by ~4x)
+            ExperimentalFlags.optIntoExperimentalAPIs()
+            ExperimentalFlags.visualTokenBudget = Int32(280)
+            
             Task {
                 do {
                     LogStore.shared.log("[InferenceEngine] Attempting GPU initialization with GPU visionBackend...")
@@ -79,6 +83,7 @@ class InferenceEngine {
                         modelPath: url.path,
                         backend: .gpu,
                         visionBackend: .gpu,
+                        maxNumTokens: 1024, // Restrict KV cache memory footprint to fit in iOS RAM limit
                         cacheDir: FileManager.default.temporaryDirectory.path
                     )
                     let engineInstance = Engine(engineConfig: config)
@@ -98,6 +103,7 @@ class InferenceEngine {
                             modelPath: url.path,
                             backend: .cpu(),
                             visionBackend: .cpu(),
+                            maxNumTokens: 1024, // Restrict KV cache memory footprint to fit in iOS RAM limit
                             cacheDir: FileManager.default.temporaryDirectory.path
                         )
                         let engineInstance = Engine(engineConfig: config)
