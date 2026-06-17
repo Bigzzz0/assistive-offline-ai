@@ -30,7 +30,7 @@ jobs:
           cd ios
           xcodegen generate
 
-      - name: Build iOS App (No Code Signing)
+      - name: Build iOS App (Ad-Hoc Signing)
         run: |
           cd ios
           xcodebuild -project AssistiveApp.xcodeproj \
@@ -38,9 +38,9 @@ jobs:
                      -configuration Debug \
                      -sdk iphoneos \
                      -derivedDataPath build \
-                     CODE_SIGN_IDENTITY="" \
+                     CODE_SIGN_IDENTITY="-" \
                      CODE_SIGNING_REQUIRED=NO \
-                     CODE_SIGNING_ALLOWED=NO \
+                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
                      clean build
 
       - name: Package IPA

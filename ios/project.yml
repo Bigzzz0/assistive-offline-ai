@@ -10,9 +10,9 @@ targets:
       - AssistiveApp
     settings:
       INFOPLIST_FILE: AssistiveApp/Info.plist
-      CODE_SIGN_IDENTITY: ""
+      CODE_SIGN_IDENTITY: "-"
       CODE_SIGNING_REQUIRED: "NO"
-      CODE_SIGNING_ALLOWED: "NO"
+      AD_HOC_CODE_SIGNING_ALLOWED: "YES"
     dependencies:
       - sdk: AVFoundation.framework
       - sdk: AudioToolbox.framework
