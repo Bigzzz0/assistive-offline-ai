@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -49,6 +50,9 @@ class AssistiveService : Service() {
     private val _inferenceOutput = MutableStateFlow("")
     val inferenceOutput: StateFlow<String> = _inferenceOutput
 
+    private val _currentlyAnalyzingBitmap = MutableStateFlow<Bitmap?>(null)
+    val currentlyAnalyzingBitmap: StateFlow<Bitmap?> = _currentlyAnalyzingBitmap
+
     data class AnalysisTask(
         val imageBytes: ByteArray,
         val prompt: String,
@@ -57,7 +61,7 @@ class AssistiveService : Service() {
 
     private val pendingPromptsQueue = java.util.concurrent.ConcurrentLinkedQueue<String>()
     private val analysisQueue = java.util.concurrent.ConcurrentLinkedQueue<AnalysisTask>()
-    private val MAX_QUEUE_SIZE = 3
+    private val MAX_QUEUE_SIZE = 1
     private var isAnalyzing = false
  
     private val NOTIFICATION_ID = 1001
@@ -120,12 +124,12 @@ class AssistiveService : Service() {
     }
 
     fun hasPendingPrompt(): Boolean {
-        return !pendingPromptsQueue.isEmpty()
+        return !isAnalyzing && !pendingPromptsQueue.isEmpty()
     }
 
     private fun enqueuePrompt(promptStr: String) {
         if (pendingPromptsQueue.size >= MAX_QUEUE_SIZE) {
-            pendingPromptsQueue.poll()
+            pendingPromptsQueue.clear()
         }
         pendingPromptsQueue.offer(promptStr)
     }
@@ -140,6 +144,7 @@ class AssistiveService : Service() {
                 analysisQueue.clear()
                 audioPipeline.stopSpeaking()
                 isAnalyzing = false
+                _currentlyAnalyzingBitmap.value = null
                 audioPipeline.speak("หยุดทำงาน")
                 _serviceStatus.value = "หยุดทำงานชั่วคราว"
             }
@@ -198,6 +203,13 @@ class AssistiveService : Service() {
         val task = analysisQueue.poll() ?: return
         isAnalyzing = true
 
+        try {
+            val bitmap = BitmapFactory.decodeByteArray(task.imageBytes, 0, task.imageBytes.size)
+            _currentlyAnalyzingBitmap.value = bitmap
+        } catch (e: Exception) {
+            Log.e("AssistiveService", "Failed to decode bitmap: ${e.message}")
+        }
+
         _serviceStatus.value = "กำลังประมวลผลด้วย AI..."
         _inferenceOutput.value = ""
 
@@ -234,6 +246,7 @@ class AssistiveService : Service() {
             audioPipeline.speak(validatedOutput) {
                 serviceScope.launch {
                     isAnalyzing = false
+                    _currentlyAnalyzingBitmap.value = null
                     processNextTask()
                 }
             }

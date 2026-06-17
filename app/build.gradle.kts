@@ -47,7 +47,7 @@ android {
         }
         jniLibs {
             pickFirsts += "**/libc++_shared.so"
-            useLegacyPackaging = true
+            useLegacyPackaging = false
         }
     }
     testOptions {

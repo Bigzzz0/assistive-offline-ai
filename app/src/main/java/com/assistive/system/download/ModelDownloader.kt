@@ -55,11 +55,13 @@ enum class ModelFile(
         fileName = "tokens.txt",
         url = "https://huggingface.co/yfyeung/icefall-asr-gigaspeech2-th-zipformer-2024-06-20/resolve/main/data/lang_bpe_2000/tokens.txt",
         subDir = "sherpa-onnx-thai"
+    ),
+    VLM_MODEL(
+        displayName = "VLM Gemma (Gemma 4 E2B)",
+        fileName = "gemma-4-E2B-it.litertlm",
+        url = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
+        subDir = ""
     );
-    // NOTE: VLM model (gemma_vlm.litertlm, ~1.5GB) must be downloaded separately
-    // via ADB or provided manually due to Hugging Face Gemma license requirements:
-    //   adb push gemma-4-E2B-it.litertlm /data/user/0/com.assistive.system/files/gemma_vlm.litertlm
-    // Instructions are shown in the Model Manager UI.
 }
 
 /**

@@ -39,7 +39,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.view.KeyEvent
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
@@ -216,6 +219,12 @@ class MainActivity : ComponentActivity() {
             assistiveService!!.performanceMonitor.metrics.collectAsState()
         } else {
             remember { mutableStateOf(PerformanceMetrics()) }
+        }
+
+        val currentlyAnalyzingBitmap by if (isBound && assistiveService != null) {
+            assistiveService!!.currentlyAnalyzingBitmap.collectAsState()
+        } else {
+            remember { mutableStateOf<Bitmap?>(null) }
         }
 
         var showDevPanel by remember { mutableStateOf(false) }
@@ -406,6 +415,38 @@ class MainActivity : ComponentActivity() {
                             .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     )
+                }
+
+                currentlyAnalyzingBitmap?.let { bitmap ->
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "ภาพที่กำลังถูกวิเคราะห์",
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                    )
+                    // Visual indicator/overlay that it's analyzing
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.4f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = Color(0xFF10B981))
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "กำลังวิเคราะห์ภาพนี้...",
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -676,6 +717,8 @@ class MainActivity : ComponentActivity() {
         val modelManager = remember { ModelManager(context) }
         var asrDownloadProgress by remember { mutableStateOf(-1f) }
         var asrStatusText by remember { mutableStateOf("") }
+        var vlmDownloadProgress by remember { mutableStateOf(-1f) }
+        var vlmStatusText by remember { mutableStateOf("") }
         var isDownloading by remember { mutableStateOf(false) }
 
         Card(
@@ -706,26 +749,55 @@ class MainActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // VLM: manual ADB instruction
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF2D3748)),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text("📋 วิธีโหลด VLM (Gemma 4 2B ~1.5 GB)", color = Color(0xFFFBBF24), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Text(
-                            "1. ดาวน์โหลดจาก:\nhttps://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm\n\n" +
-                            "2. Push ไฟล์เข้าอุปกรณ์:\nadb push gemma-4-E2B-it.litertlm " +
-                            "${context.filesDir.absolutePath}/gemma_vlm.litertlm",
-                            color = Color(0xFFE2E8F0),
-                            fontSize = 11.sp,
-                            lineHeight = 16.sp
+                // VLM: auto download
+                if (!modelManager.isVlmReady()) {
+                    if (vlmDownloadProgress >= 0f && vlmDownloadProgress < 1f) {
+                        LinearProgressIndicator(
+                            progress = { vlmDownloadProgress },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            color = Color(0xFF10B981)
                         )
+                        Text(vlmStatusText, color = Color.LightGray, fontSize = 11.sp)
+                    } else {
+                        Button(
+                            onClick = {
+                                if (!isDownloading) {
+                                    if (!modelManager.hasEnoughSpace()) {
+                                        vlmStatusText = "❌ พื้นที่ในเครื่องไม่พอสำหรับประมวลผล (ต้องใช้พื้นที่ว่าง > 2.5 GB)"
+                                        return@Button
+                                    }
+                                    isDownloading = true
+                                    coroutineScope.launch {
+                                        val modelFile = ModelFile.VLM_MODEL
+                                        val destFile = modelManager.getDestFile(modelFile)
+                                        ModelDownloader.downloadFile(modelFile.url, destFile, modelFile.displayName)
+                                            .collect { progress ->
+                                                vlmDownloadProgress = progress.progressPercent
+                                                vlmStatusText = "${progress.fileName}: ${"%.1f".format(progress.progressPercent * 100)}%"
+                                                if (progress.error != null) {
+                                                    vlmStatusText = "❌ ${progress.error}"
+                                                }
+                                            }
+                                        isDownloading = false
+                                        vlmDownloadProgress = -1f
+                                        if (modelManager.isVlmReady()) {
+                                            assistiveService?.reinitializePipelines()
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = !isDownloading,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("⬇️ ดาวน์โหลด VLM Gemma Model (~1.5 GB)", fontSize = 13.sp)
+                        }
+                        if (vlmStatusText.isNotEmpty()) {
+                            Text(vlmStatusText, color = Color(0xFFEF4444), fontSize = 11.sp)
+                        }
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
-
-                Spacer(modifier = Modifier.height(8.dp))
 
                 // ASR: auto download
                 if (!modelManager.isAsrReady()) {
