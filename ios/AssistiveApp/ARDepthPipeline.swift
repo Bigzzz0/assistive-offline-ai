@@ -101,7 +101,15 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         }
     }
 
+    func processManualFrame(_ frame: ARFrame) {
+        processFrame(frame)
+    }
+    
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        processFrame(frame)
+    }
+    
+    private func processFrame(_ frame: ARFrame) {
         guard isActive else { return }
         let now = CACurrentMediaTime()
         // Throttle to adaptive interval to save GPU/CPU thermals

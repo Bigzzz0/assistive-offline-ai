@@ -12,9 +12,7 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     private var lastAnnouncedTime: Double = 0.0
     private let announcementInterval: Double = 4.0 // Announce every 4 seconds to limit audio overhead
     
-    private var delegateProxy: ARSessionDelegateProxy?
-    private var delegatePollTimer: Timer?
-    private var pollAttempts = 0
+    private var framePollTimer: Timer?
     private var mockTimer: Timer?
     private var mockDistance: Float = 3.0
     
@@ -40,42 +38,25 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         let config = RoomCaptureSession.Configuration()
         session.run(configuration: config)
         
-        // Poll for asynchronous delegate configuration
-        pollAttempts = 0
-        delegatePollTimer?.invalidate()
-        delegatePollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
-            guard let self = self, let session = self.session else {
-                timer.invalidate()
-                return
-            }
-            self.pollAttempts += 1
-            if let currentDelegate = session.arSession.delegate {
-                if !(currentDelegate is ARSessionDelegateProxy) {
-                    LogStore.shared.log("[RoomPlan] Found original delegate after \(self.pollAttempts) attempts: \(type(of: currentDelegate))")
-                    let proxy = ARSessionDelegateProxy(original: currentDelegate, secondary: ARDepthPipeline.shared)
-                    self.delegateProxy = proxy
-                    session.arSession.delegate = proxy
-                    timer.invalidate()
-                }
-            } else if self.pollAttempts >= 30 {
-                LogStore.shared.log("[RoomPlan] Polling delegate timed out. Setting proxy with nil original delegate.")
-                let proxy = ARSessionDelegateProxy(original: nil, secondary: ARDepthPipeline.shared)
-                self.delegateProxy = proxy
-                session.arSession.delegate = proxy
-                timer.invalidate()
-            }
+        // Poll for currentFrame directly without touching delegate
+        framePollTimer?.invalidate()
+        framePollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self = self,
+                  let session = self.session,
+                  let frame = session.arSession.currentFrame else { return }
+            
+            ARDepthPipeline.shared.processManualFrame(frame)
         }
     }
     
     func stopSession() {
         mockTimer?.invalidate()
         mockTimer = nil
-        delegatePollTimer?.invalidate()
-        delegatePollTimer = nil
+        framePollTimer?.invalidate()
+        framePollTimer = nil
         
         session?.stop()
         session = nil
-        delegateProxy = nil // Release proxy to avoid retain cycles/leaks
         
         // Disable ARDepthPipeline and restore throttleInterval
         ARDepthPipeline.shared.deactivate()
@@ -122,10 +103,9 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     }
     
     func pauseSession() {
-        delegatePollTimer?.invalidate()
-        delegatePollTimer = nil
+        framePollTimer?.invalidate()
+        framePollTimer = nil
         session?.stop()
-        delegateProxy = nil // Release proxy
         ARDepthPipeline.shared.deactivate()
         LogStore.shared.log("[RoomPlan] Session paused (GPU yield).")
     }
@@ -137,35 +117,20 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         
         ARDepthPipeline.shared.activate(with: session.arSession)
         
-        // Poll for asynchronous delegate configuration
-        pollAttempts = 0
-        delegatePollTimer?.invalidate()
-        delegatePollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
-            guard let self = self, let session = self.session else {
-                timer.invalidate()
-                return
-            }
-            self.pollAttempts += 1
-            if let currentDelegate = session.arSession.delegate {
-                if !(currentDelegate is ARSessionDelegateProxy) {
-                    LogStore.shared.log("[RoomPlan] Found original delegate after resume: \(type(of: currentDelegate))")
-                    let proxy = ARSessionDelegateProxy(original: currentDelegate, secondary: ARDepthPipeline.shared)
-                    self.delegateProxy = proxy
-                    session.arSession.delegate = proxy
-                    timer.invalidate()
-                }
-            } else if self.pollAttempts >= 30 {
-                let proxy = ARSessionDelegateProxy(original: nil, secondary: ARDepthPipeline.shared)
-                self.delegateProxy = proxy
-                session.arSession.delegate = proxy
-                timer.invalidate()
-            }
+        // Poll for currentFrame directly without touching delegate
+        framePollTimer?.invalidate()
+        framePollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self = self,
+                  let session = self.session,
+                  let frame = session.arSession.currentFrame else { return }
+            
+            ARDepthPipeline.shared.processManualFrame(frame)
         }
         
         LogStore.shared.log("[RoomPlan] Session resumed.")
     }
     
-    func roomCaptureSession(_ session: RoomCaptureSession, didUpdate room: CapturedRoom) {
+    func captureSession(_ session: RoomCaptureSession, didUpdate room: CapturedRoom) {
         // Get current camera position relative to session origin
         var cameraPos = simd_make_float3(0, 0, 0)
         if let cameraTransform = session.arSession.currentFrame?.camera.transform {
@@ -283,76 +248,6 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     }
 }
 
-// Proxy delegate to broadcast ARSession delegate calls to both RoomPlan's internal listener and ARDepthPipeline
-@available(iOS 16.0, *)
-class ARSessionDelegateProxy: NSObject, ARSessionDelegate {
-    private weak var originalDelegate: ARSessionDelegate?
-    private weak var secondaryDelegate: ARSessionDelegate?
-    
-    init(original: ARSessionDelegate?, secondary: ARSessionDelegate?) {
-        self.originalDelegate = original
-        self.secondaryDelegate = secondary
-        super.init()
-    }
-    
-    override func responds(to aSelector: Selector!) -> Bool {
-        if super.responds(to: aSelector) {
-            return true
-        }
-        return (originalDelegate?.responds(to: aSelector) ?? false) || (secondaryDelegate?.responds(to: aSelector) ?? false)
-    }
-    
-    func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        originalDelegate?.session?(session, didUpdate: frame)
-        secondaryDelegate?.session?(session, didUpdate: frame)
-    }
-    
-    func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
-        originalDelegate?.session?(session, didAdd: anchors)
-        secondaryDelegate?.session?(session, didAdd: anchors)
-    }
-    
-    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
-        originalDelegate?.session?(session, didUpdate: anchors)
-        secondaryDelegate?.session?(session, didUpdate: anchors)
-    }
-    
-    func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
-        originalDelegate?.session?(session, didRemove: anchors)
-        secondaryDelegate?.session?(session, didRemove: anchors)
-    }
-    
-    func session(_ session: ARSession, didFailWithError error: Error) {
-        originalDelegate?.session?(session, didFailWithError: error)
-        secondaryDelegate?.session?(session, didFailWithError: error)
-    }
-    
-    func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
-        originalDelegate?.session?(session, cameraDidChangeTrackingState: camera)
-        secondaryDelegate?.session?(session, cameraDidChangeTrackingState: camera)
-    }
-    
-    func sessionWasInterrupted(_ session: ARSession) {
-        originalDelegate?.sessionWasInterrupted?(session)
-        secondaryDelegate?.sessionWasInterrupted?(session)
-    }
-    
-    func sessionInterruptionEnded(_ session: ARSession) {
-        originalDelegate?.sessionInterruptionEnded?(session)
-        secondaryDelegate?.sessionInterruptionEnded?(session)
-    }
-    
-    func sessionShouldAttemptRelocalization(_ session: ARSession) -> Bool {
-        let orig = originalDelegate?.sessionShouldAttemptRelocalization?(session) ?? false
-        let sec = secondaryDelegate?.sessionShouldAttemptRelocalization?(session) ?? false
-        return orig || sec
-    }
-    
-    func session(_ session: ARSession, didOutputCollaborationData data: ARSession.CollaborationData) {
-        originalDelegate?.session?(session, didOutputCollaborationData: data)
-        secondaryDelegate?.session?(session, didOutputCollaborationData: data)
-    }
-}
 #endif
 
 class DeviceCapabilities {
