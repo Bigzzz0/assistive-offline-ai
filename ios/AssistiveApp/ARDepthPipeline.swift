@@ -70,6 +70,37 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         LogStore.shared.log("[ARDepthPipeline] Deactivated.")
     }
     
+    private func getCGImageOrientation() -> CGImagePropertyOrientation {
+        let deviceOrientation = UIDevice.current.orientation
+        switch deviceOrientation {
+        case .portrait:
+            return .right
+        case .portraitUpsideDown:
+            return .left
+        case .landscapeLeft:
+            return .up
+        case .landscapeRight:
+            return .down
+        default:
+            return .right // Default fallback for portrait
+        }
+    }
+    
+    private func mapToRawImageCoordinates(point: CGPoint, orientation: CGImagePropertyOrientation) -> CGPoint {
+        switch orientation {
+        case .up:
+            return CGPoint(x: point.x, y: point.y)
+        case .down:
+            return CGPoint(x: 1.0 - point.x, y: 1.0 - point.y)
+        case .right:
+            return CGPoint(x: 1.0 - point.y, y: point.x)
+        case .left:
+            return CGPoint(x: point.y, y: 1.0 - point.x)
+        default:
+            return CGPoint(x: 1.0 - point.y, y: point.x) // Default for portrait (.right)
+        }
+    }
+
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard isActive else { return }
         let now = CACurrentMediaTime()
@@ -83,12 +114,13 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         let pixelBuffer = frame.capturedImage
         
         let personRequest = VNDetectHumanRectanglesRequest()
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
+        let orientation = getCGImageOrientation()
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
         
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try handler.perform([personRequest])
-                self.processPersonObservations(frame: frame, observations: personRequest.results ?? [])
+                self.processPersonObservations(frame: frame, observations: personRequest.results ?? [], orientation: orientation)
             } catch {
                 print("AR Vision error: \(error.localizedDescription)")
             }
@@ -96,7 +128,7 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         }
     }
     
-    private func processPersonObservations(frame: ARFrame, observations: [VNHumanObservation]) {
+    private func processPersonObservations(frame: ARFrame, observations: [VNHumanObservation], orientation: CGImagePropertyOrientation) {
         guard !observations.isEmpty else {
             lastDetectedPeopleWorldPositions.removeAll()
             AudioPipeline.shared.updateDistanceAlert(distance: 999.0) // Safe
@@ -113,8 +145,11 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         var currentPositions: [simd_float3] = []
         
         for observation in observations {
-            let bbox = observation.boundingBox // Normalized [0, 1] bottom-left origin
+            let bbox = observation.boundingBox // Normalized [0, 1] bottom-left origin in oriented space
             let center = CGPoint(x: bbox.midX, y: bbox.midY)
+            
+            // Map oriented center to raw image coordinates
+            let rawCenter = mapToRawImageCoordinates(point: center, orientation: orientation)
             
             var distance: Float = 0.0
             var hasLiDARDepth = false
@@ -125,9 +160,9 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
                 let width = CVPixelBufferGetWidth(depthMap)
                 let height = CVPixelBufferGetHeight(depthMap)
                 
-                // Convert Vision normalized coordinate (origin bottom-left) to Depth map (origin top-left)
-                let xIndex = Int(center.x * CGFloat(width - 1))
-                let yIndex = Int((1.0 - center.y) * CGFloat(height - 1))
+                // Convert raw coordinate (origin bottom-left) to Depth map (origin top-left)
+                let xIndex = Int(rawCenter.x * CGFloat(width - 1))
+                let yIndex = Int((1.0 - rawCenter.y) * CGFloat(height - 1))
                 
                 if xIndex >= 0 && xIndex < width && yIndex >= 0 && yIndex < height {
                     let baseAddress = CVPixelBufferGetBaseAddress(depthMap)
@@ -153,8 +188,8 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
                 minDistance = distance
             }
             
-            // Project 2D center coordinate and depth into 3D world space
-            let projected3D = projectToWorld(center: center, depth: distance, frame: frame)
+            // Project 2D raw center coordinate and depth into 3D world space
+            let projected3D = projectToWorld(rawCenter: rawCenter, depth: distance, frame: frame)
             currentPositions.append(projected3D)
         }
         
@@ -182,13 +217,13 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
     }
     
-    private func projectToWorld(center: CGPoint, depth: Float, frame: ARFrame) -> simd_float3 {
+    private func projectToWorld(rawCenter: CGPoint, depth: Float, frame: ARFrame) -> simd_float3 {
         let camera = frame.camera
         let imageSize = camera.imageResolution
         
-        // Normalized point to pixel coordinates
-        let x = Float(center.x) * Float(imageSize.width)
-        let y = Float(1.0 - center.y) * Float(imageSize.height) // convert bottom-left to top-left for camera unprojection
+        // Normalized raw point to pixel coordinates
+        let x = Float(rawCenter.x) * Float(imageSize.width)
+        let y = Float(1.0 - rawCenter.y) * Float(imageSize.height) // convert bottom-left to top-left for camera unprojection
         
         let intrinsics = camera.intrinsics
         let fx = intrinsics[0][0]

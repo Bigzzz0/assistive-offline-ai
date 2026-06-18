@@ -13,9 +13,6 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     private let announcementInterval: Double = 4.0 // Announce every 4 seconds to limit audio overhead
     
     private var delegateProxy: ARSessionDelegateProxy?
-    private var delegateObserverContext = 0
-    private var isSettingDelegate = false
-    private var isObservingDelegate = false
     private var mockTimer: Timer?
     private var mockDistance: Float = 3.0
     
@@ -38,30 +35,22 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         
         self.session = session
         
-        // Register KVO on delegate to prevent RoomCaptureSession from overwriting the proxy
-        if !isObservingDelegate {
-            session.arSession.addObserver(self, forKeyPath: "delegate", options: [.initial, .new], context: &delegateObserverContext)
-            isObservingDelegate = true
-            LogStore.shared.log("[RoomPlan] Registered delegate KVO observer.")
-        }
-        
         let config = RoomCaptureSession.Configuration()
         session.run(configuration: config)
+        
+        // Intercept/wrap RoomCaptureSession's delegate with proxy delegate
+        let originalDelegate = session.arSession.delegate
+        LogStore.shared.log("[RoomPlan] Original ARSession delegate: \(String(describing: originalDelegate))")
+        let proxy = ARSessionDelegateProxy(original: originalDelegate, secondary: ARDepthPipeline.shared)
+        self.delegateProxy = proxy
+        session.arSession.delegate = proxy
     }
     
     func stopSession() {
         mockTimer?.invalidate()
         mockTimer = nil
         
-        if let session = session {
-            if isObservingDelegate {
-                session.arSession.removeObserver(self, forKeyPath: "delegate", context: &delegateObserverContext)
-                isObservingDelegate = false
-                LogStore.shared.log("[RoomPlan] Unregistered delegate KVO observer (stop).")
-            }
-            session.stop()
-        }
-        
+        session?.stop()
         session = nil
         delegateProxy = nil // Release proxy to avoid retain cycles/leaks
         
@@ -110,14 +99,7 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     }
     
     func pauseSession() {
-        if let session = session {
-            if isObservingDelegate {
-                session.arSession.removeObserver(self, forKeyPath: "delegate", context: &delegateObserverContext)
-                isObservingDelegate = false
-                LogStore.shared.log("[RoomPlan] Unregistered delegate KVO observer (pause).")
-            }
-            session.stop()
-        }
+        session?.stop()
         delegateProxy = nil // Release proxy
         ARDepthPipeline.shared.deactivate()
         LogStore.shared.log("[RoomPlan] Session paused (GPU yield).")
@@ -125,49 +107,17 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     
     func resumeSession() {
         guard let session = self.session else { return }
-        
-        // Ensure KVO is registered
-        if !isObservingDelegate {
-            session.arSession.addObserver(self, forKeyPath: "delegate", options: [.initial, .new], context: &delegateObserverContext)
-            isObservingDelegate = true
-            LogStore.shared.log("[RoomPlan] Registered delegate KVO observer (resume).")
-        }
-        
         let config = RoomCaptureSession.Configuration()
         session.run(configuration: config)
         
+        // Restore delegate proxy and active state
+        let originalDelegate = session.arSession.delegate
+        let proxy = ARSessionDelegateProxy(original: originalDelegate, secondary: ARDepthPipeline.shared)
+        self.delegateProxy = proxy
+        session.arSession.delegate = proxy
+        
         ARDepthPipeline.shared.activate(with: session.arSession)
         LogStore.shared.log("[RoomPlan] Session resumed.")
-    }
-    
-    override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
-        if context == &delegateObserverContext {
-            guard let arSession = object as? ARSession else { return }
-            guard !isSettingDelegate else { return }
-            
-            let newDelegateValue = arSession.delegate
-            if let newDelegate = newDelegateValue {
-                if newDelegate is ARSessionDelegateProxy {
-                    return
-                }
-                
-                LogStore.shared.log("[RoomPlan] Intercepted new ARSession delegate: \(type(of: newDelegate))")
-                isSettingDelegate = true
-                let proxy = ARSessionDelegateProxy(original: newDelegate, secondary: ARDepthPipeline.shared)
-                self.delegateProxy = proxy
-                arSession.delegate = proxy
-                isSettingDelegate = false
-            } else {
-                LogStore.shared.log("[RoomPlan] Intercepted nil ARSession delegate")
-                isSettingDelegate = true
-                let proxy = ARSessionDelegateProxy(original: nil, secondary: ARDepthPipeline.shared)
-                self.delegateProxy = proxy
-                arSession.delegate = proxy
-                isSettingDelegate = false
-            }
-        } else {
-            super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
-        }
     }
     
     func roomCaptureSession(_ session: RoomCaptureSession, didUpdate room: CapturedRoom) {
