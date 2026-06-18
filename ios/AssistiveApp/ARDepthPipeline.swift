@@ -5,7 +5,7 @@ import Foundation
 class ARDepthPipeline: NSObject, ARSessionDelegate {
     static let shared = ARDepthPipeline()
     
-    private var session: ARSession?
+    private(set) var session: ARSession?
     private var isProcessing = false
     private var lastProcessedTime: Double = 0.0
     private(set) var isActive = false
