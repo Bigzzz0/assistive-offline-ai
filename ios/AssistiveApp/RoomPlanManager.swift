@@ -18,6 +18,10 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
             return
         }
         
+        // Start ARDepthPipeline with lower FPS (0.50s throttle interval) before RoomCaptureSession
+        ARDepthPipeline.shared.throttleInterval = 0.50
+        ARDepthPipeline.shared.startSession()
+        
         LogStore.shared.log("[RoomPlan] Starting RoomCaptureSession...")
         let session = RoomCaptureSession()
         session.delegate = self
@@ -30,6 +34,24 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     func stopSession() {
         session?.stop()
         session = nil
+        
+        // Stop ARDepthPipeline and restore throttleInterval
+        ARDepthPipeline.shared.stopSession()
+        ARDepthPipeline.shared.throttleInterval = 0.20
+    }
+    
+    func pauseSession() {
+        session?.stop()
+        ARDepthPipeline.shared.pauseSession()
+        LogStore.shared.log("[RoomPlan] Session paused (GPU yield).")
+    }
+    
+    func resumeSession() {
+        guard let session = self.session else { return }
+        let config = RoomCaptureSession.Configuration()
+        session.run(configuration: config)
+        ARDepthPipeline.shared.resumeSession()
+        LogStore.shared.log("[RoomPlan] Session resumed.")
     }
     
     func roomCaptureSession(_ session: RoomCaptureSession, didUpdate room: CapturedRoom) {

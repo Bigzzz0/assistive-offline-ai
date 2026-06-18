@@ -46,6 +46,8 @@ enum ActiveMode: String, CaseIterable {
 
 struct ContentView: View {
     @State private var currentMode: ActiveMode = .object
+    @State private var lastModeChangeTime: Date = .distantPast
+    private let modeSwitchCooldown: TimeInterval = 1.0
     @State private var statusText: String = "กำลังเริ่มต้นระบบ..."
     @State private var aiResultText: String = ""
     @State private var showDevPanel: Bool = false
@@ -552,12 +554,15 @@ struct ContentView: View {
         .background(Color.black.edgesIgnoringSafeArea(.all))
         .gesture(
             DragGesture().onEnded { value in
+                guard Date().timeIntervalSince(lastModeChangeTime) >= modeSwitchCooldown else { return }
                 if value.translation.width > 100 { // Swipe Right -> previous
                     currentMode = currentMode.previous()
                     announceMode()
+                    lastModeChangeTime = Date()
                 } else if value.translation.width < -100 { // Swipe Left -> next
                     currentMode = currentMode.next()
                     announceMode()
+                    lastModeChangeTime = Date()
                 }
             }
         )
@@ -672,6 +677,7 @@ struct ContentView: View {
             #if canImport(RoomPlan)
             if DeviceCapabilities.supportsLiDAR() {
                 RoomPlanManager.shared.startSession()
+                // Note: ARDepthPipeline is started inside RoomPlanManager for occupancy detection
             } else {
                 speakText("อุปกรณ์นี้ไม่รองรับระบบไลดาร์ สลับเป็นโหมดจำลองสิ่งกีดขวาง")
                 aiResultText = "อุปกรณ์ไม่รองรับ LiDAR จะทำงานในโหมดจำลองสิ่งกีดขวางแบบออฟไลน์"
@@ -684,7 +690,7 @@ struct ContentView: View {
             VisionPipeline.shared.stopSession()
             ARDepthPipeline.shared.startSession()
         } else {
-            if VisionPipeline.shared.session == nil || !VisionPipeline.shared.session!.isRunning {
+            if !(VisionPipeline.shared.session?.isRunning ?? false) {
                 VisionPipeline.shared.startSession()
             }
         }

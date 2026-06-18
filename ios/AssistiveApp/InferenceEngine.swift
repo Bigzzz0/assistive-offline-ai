@@ -71,6 +71,7 @@ class InferenceEngine {
     static let shared = InferenceEngine()
     
     private var isInitialized = false
+    private var isInitializing = false
     private var isMockMode = true
     private var modelURL: URL?
     
@@ -93,11 +94,20 @@ class InferenceEngine {
             return true
         }
         
+        if isInitializing {
+            LogStore.shared.log("[InferenceEngine] Initialization already in progress. Skipping.")
+            return false
+        }
+        isInitializing = true
+        
         isInitialized = false
         
         let fileManager = FileManager.default
         let paths = fileManager.urls(for: .documentDirectory, in: .userDomainMask)
-        guard let documentsDirectory = paths.first else { return false }
+        guard let documentsDirectory = paths.first else {
+            isInitializing = false
+            return false
+        }
         
         // Check for Gemma 4 model with both filenames
         let primaryURL = documentsDirectory.appendingPathComponent("gemma-4-E2B-it.litertlm")
@@ -112,6 +122,7 @@ class InferenceEngine {
         } else {
             isMockMode = true
             isInitialized = true
+            isInitializing = false
         }
         
         if !isMockMode, let url = modelURL {
@@ -126,16 +137,16 @@ class InferenceEngine {
             switch thermalState {
             case .nominal:
                 thermalLabel = "Nominal (ปกติ)"
-                tokenBudget = 560
+                tokenBudget = 1120
             case .fair:
                 thermalLabel = "Fair (อุ่นเล็กน้อย)"
-                tokenBudget = 280
+                tokenBudget = 560
             case .serious, .critical:
                 thermalLabel = "Serious/Critical (ร้อน/วิกฤต)"
-                tokenBudget = 140
+                tokenBudget = 280
             @unknown default:
                 thermalLabel = "Unknown"
-                tokenBudget = 140
+                tokenBudget = 280
             }
             ExperimentalFlags.visualTokenBudget = tokenBudget
             LogStore.shared.log("[InferenceEngine] Device thermal state is \(thermalLabel). Dynamically adjusted visualTokenBudget to \(tokenBudget) to keep thermals under 45°C.")
@@ -156,6 +167,7 @@ class InferenceEngine {
                     self.conversation = try await engineInstance.createConversation()
                     LogStore.shared.log("[InferenceEngine] LiteRT-LM Engine & Conversation initialized successfully on GPU.")
                     self.isInitialized = true
+                    self.isInitializing = false
                     
                     DispatchQueue.main.async {
                         NotificationCenter.default.post(name: NSNotification.Name("InferenceEngineStateDidChange"), object: nil)
@@ -176,6 +188,7 @@ class InferenceEngine {
                         self.conversation = try await engineInstance.createConversation()
                         LogStore.shared.log("[InferenceEngine] LiteRT-LM Engine & Conversation initialized successfully on CPU.")
                         self.isInitialized = true
+                        self.isInitializing = false
                         
                         DispatchQueue.main.async {
                             NotificationCenter.default.post(name: NSNotification.Name("InferenceEngineStateDidChange"), object: nil)
@@ -184,6 +197,7 @@ class InferenceEngine {
                         LogStore.shared.log("[InferenceEngine] CPU initialization failed: \(error.localizedDescription). Running in Mock Mode.")
                         self.isMockMode = true
                         self.isInitialized = true
+                        self.isInitializing = false
                         
                         DispatchQueue.main.async {
                             NotificationCenter.default.post(name: NSNotification.Name("InferenceEngineStateDidChange"), object: nil)
@@ -320,6 +334,17 @@ class InferenceEngine {
         if !isMockMode, let engine = self.engine {
             LogStore.shared.log("[InferenceEngine] Starting VLM image analysis. Image size: \(jpegData.count) bytes. Prompt: \(promptText)")
             
+            // Temporarily pause AR sessions to free GPU for VLM inference
+            let wasARActive = ARDepthPipeline.shared.isActive
+            let wasRoomPlanActive: Bool
+            #if canImport(RoomPlan)
+            wasRoomPlanActive = RoomPlanManager.shared.session != nil
+            RoomPlanManager.shared.pauseSession()
+            #else
+            wasRoomPlanActive = false
+            #endif
+            ARDepthPipeline.shared.pauseSession()
+            
             Task.detached(priority: .userInitiated) {
                 do {
                     LogStore.shared.log("[InferenceEngine] Re-creating conversation to clear context history...")
@@ -365,9 +390,24 @@ class InferenceEngine {
                     
                     DispatchQueue.main.async {
                         completion(finalizedText)
+                        
+                        // Resume AR sessions after inference completes
+                        if wasARActive { ARDepthPipeline.shared.resumeSession() }
+                        #if canImport(RoomPlan)
+                        if wasRoomPlanActive { RoomPlanManager.shared.resumeSession() }
+                        #endif
                     }
                 } catch {
                     LogStore.shared.log("[InferenceEngine] Real VLM inference error: \(error.localizedDescription)")
+                    
+                    // Resume AR sessions in case of error
+                    DispatchQueue.main.async {
+                        if wasARActive { ARDepthPipeline.shared.resumeSession() }
+                        #if canImport(RoomPlan)
+                        if wasRoomPlanActive { RoomPlanManager.shared.resumeSession() }
+                        #endif
+                    }
+                    
                     // Fallback to mock response if local model fails during execution
                     self.runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
                 }

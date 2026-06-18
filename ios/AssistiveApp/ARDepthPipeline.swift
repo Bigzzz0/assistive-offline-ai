@@ -8,6 +8,11 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
     private var session: ARSession?
     private var isProcessing = false
     private var lastProcessedTime: Double = 0.0
+    private(set) var isActive = false
+    private var savedConfig: ARWorldTrackingConfiguration?
+    
+    // Adaptive throttle: lower FPS when running alongside RoomPlan
+    var throttleInterval: Double = 0.20 // Default 5 FPS
     
     // Store 3D coordinates of detected people (for Seat Occupancy in RoomPlan)
     private(set) var lastDetectedPeopleWorldPositions: [simd_float3] = []
@@ -26,19 +31,38 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
             LogStore.shared.log("[ARDepthPipeline] LiDAR Scene Depth not supported. Using bounding-box distance fallback.")
         }
         
+        self.savedConfig = config
+        self.isActive = true
         session.run(config)
     }
     
     func stopSession() {
         session?.pause()
         session = nil
+        isActive = false
+        savedConfig = nil
         lastDetectedPeopleWorldPositions.removeAll()
     }
     
+    func pauseSession() {
+        guard isActive, let session = session else { return }
+        session.pause()
+        isActive = false
+        LogStore.shared.log("[ARDepthPipeline] Session paused (GPU yield).")
+    }
+    
+    func resumeSession() {
+        guard !isActive, let session = session, let config = savedConfig else { return }
+        session.run(config)
+        isActive = true
+        LogStore.shared.log("[ARDepthPipeline] Session resumed.")
+    }
+    
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        guard isActive else { return }
         let now = CACurrentMediaTime()
-        // Throttle to 5 FPS (200ms interval) to save GPU/CPU thermals
-        guard now - lastProcessedTime >= 0.20 else { return }
+        // Throttle to adaptive interval to save GPU/CPU thermals
+        guard now - lastProcessedTime >= throttleInterval else { return }
         guard !isProcessing else { return }
         
         isProcessing = true
