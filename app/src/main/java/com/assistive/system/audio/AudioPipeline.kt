@@ -17,6 +17,8 @@ import java.io.File
 import java.util.Locale
 import java.util.UUID
 import kotlin.concurrent.thread
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class AudioPipeline(
     private val context: Context,
@@ -38,7 +40,6 @@ class AudioPipeline(
 
     init {
         tts = TextToSpeech(context, this)
-        initializeRecognizer()
     }
 
     // ===== Public API =====
@@ -47,13 +48,15 @@ class AudioPipeline(
     fun isAsrReady(): Boolean = recognizer != null
 
     /** โหลด ASR model ใหม่หลังดาวน์โหลดสำเร็จ (ไม่ต้อง restart แอป) */
-    fun reinitializeRecognizer() {
+    suspend fun reinitializeRecognizer() {
         val wasListening = isListening
         if (wasListening) stopListening()
         
-        recognizer?.release()
-        recognizer = null
-        initializeRecognizer()
+        withContext(Dispatchers.IO) {
+            recognizer?.release()
+            recognizer = null
+            initializeRecognizer()
+        }
         
         if (wasListening && keywordCallback != null) {
             startListening(keywordCallback!!)
@@ -63,11 +66,11 @@ class AudioPipeline(
 
     // ===== Internal Setup =====
 
-    fun initializeRecognizer() {
+    suspend fun initializeRecognizer() = withContext(Dispatchers.IO) {
         val encoderFile = File(modelDirPath, "encoder.onnx")
         if (!encoderFile.exists()) {
             Log.w("AudioPipeline", "Sherpa-ONNX encoder not found at $modelDirPath. ASR in simulation mode.")
-            return
+            return@withContext
         }
 
         try {
@@ -86,6 +89,12 @@ class AudioPipeline(
             }
             recognizer = OfflineRecognizer(null, config)
             Log.i("AudioPipeline", "Sherpa-ONNX Thai ASR (OfflineRecognizer) initialized successfully.")
+            
+            // If listen was requested before initialization finished, start the recording thread now
+            if (isListening && keywordCallback != null) {
+                Log.i("AudioPipeline", "ASR initialized while listening was active. Starting microphone thread.")
+                startListeningThread(keywordCallback!!)
+            }
         } catch (e: Exception) {
             Log.e("AudioPipeline", "Failed to initialize Sherpa-ONNX: ${e.message}", e)
         }
@@ -115,6 +124,13 @@ class AudioPipeline(
             Log.i("AudioPipeline", "ASR Simulation Mode: Use buttons to trigger commands.")
             return
         }
+
+        startListeningThread(onKeywordDetected)
+    }
+
+    private fun startListeningThread(onKeywordDetected: (String) -> Unit) {
+        if (recordingThread != null) return // Already running
+        val rec = recognizer ?: return
 
         val sampleRate = 16000
         val audioSource = MediaRecorder.AudioSource.MIC

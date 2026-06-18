@@ -51,6 +51,7 @@ import androidx.core.content.ContextCompat
 import com.assistive.system.download.ModelDownloader
 import com.assistive.system.download.ModelFile
 import com.assistive.system.download.ModelManager
+import com.assistive.system.logging.AppLogger
 import com.assistive.system.monitoring.PerformanceMetrics
 import com.assistive.system.service.AssistiveService
 import com.assistive.system.vision.VisionPipeline
@@ -94,6 +95,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLogger.init(applicationContext)
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         checkPermissionsAndStart()
@@ -870,6 +872,9 @@ class MainActivity : ComponentActivity() {
     // ========================================
     @Composable
     fun DeveloperPanel() {
+        val context = LocalContext.current
+        val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+        val logsText by AppLogger.logFlow.collectAsState()
         Card(
             colors = CardDefaults.cardColors(containerColor = Color(0xFF334155)),
             shape = RoundedCornerShape(12.dp),
@@ -947,6 +952,61 @@ class MainActivity : ComponentActivity() {
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
                         modifier = Modifier.weight(1f).semantics { contentDescription = "ทดสอบสั่น ระดับ 3 อันตราย" }
                     ) { Text("Lv3 อันตราย", fontSize = 10.sp) }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "📋 System Logs (app_logs.txt):",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(
+                            onClick = {
+                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(logsText))
+                                android.widget.Toast.makeText(context, "คัดลอก Logs เรียบร้อยแล้ว", android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF60A5FA))
+                        ) {
+                            Text("Copy Logs", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        TextButton(
+                            onClick = { AppLogger.clearLogs() },
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF87171))
+                        ) {
+                            Text("Clear Logs", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                        .background(Color.Black, RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                ) {
+                    val scrollState = rememberScrollState()
+                    LaunchedEffect(logsText) {
+                        scrollState.scrollTo(scrollState.maxValue)
+                    }
+                    Text(
+                        text = logsText.ifEmpty { "No logs recorded." },
+                        color = Color(0xFF4ADE80), // Terminal green
+                        fontSize = 10.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState)
+                    )
                 }
             }
         }

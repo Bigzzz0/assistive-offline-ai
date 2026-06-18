@@ -13,7 +13,7 @@ import android.graphics.BitmapFactory
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
+import com.assistive.system.logging.AppLogger as Log
 import androidx.core.app.NotificationCompat
 import com.assistive.system.MainActivity
 import com.assistive.system.ai.InferenceEngine
@@ -73,6 +73,7 @@ class AssistiveService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        com.assistive.system.logging.AppLogger.init(applicationContext)
         Log.i("AssistiveService", "Service onCreate")
         
         // 1. Start as foreground service immediately
@@ -87,8 +88,10 @@ class AssistiveService : Service() {
 
         // Initialize AI engine asynchronously
         serviceScope.launch {
-            _serviceStatus.value = "กำลังเตรียมแบบจำลองภาษา..."
+            _serviceStatus.value = "กำลังเตรียมแบบจำลองภาษาและเสียง..."
             val success = inferenceEngine.initialize()
+            audioPipeline.initializeRecognizer()
+
             val isVlmReal = !inferenceEngine.isMockMode()
             val isAsrReal = audioPipeline.isAsrReady()
             performanceMonitor.updateVlmMode(isVlmReal)

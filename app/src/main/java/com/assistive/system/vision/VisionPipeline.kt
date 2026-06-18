@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.hardware.Sensor
@@ -197,23 +198,30 @@ class VisionPipeline(
     }
 
     private fun imageProxyToJpegBytes(image: ImageProxy): ByteArray {
-        val yBuffer = image.planes[0].buffer
-        val uBuffer = image.planes[1].buffer
-        val vBuffer = image.planes[2].buffer
-
-        val ySize = yBuffer.remaining()
-        val uSize = uBuffer.remaining()
-        val vSize = vBuffer.remaining()
-
-        val nv21 = ByteArray(ySize + uSize + vSize)
-
-        yBuffer.get(nv21, 0, ySize)
-        vBuffer.get(nv21, ySize, vSize)
-        uBuffer.get(nv21, ySize + vSize, uSize)
-
-        val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
+        val bitmap = image.toBitmap()
+        val rotationDegrees = image.imageInfo.rotationDegrees
+        val finalBitmap = if (rotationDegrees != 0) {
+            val matrix = Matrix().apply {
+                postRotate(rotationDegrees.toFloat())
+            }
+            val rotated = Bitmap.createBitmap(
+                bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
+            )
+            bitmap.recycle()
+            rotated
+        } else {
+            bitmap
+        }
+        
+        // Downscale image to 448x448 to prevent native memory exhaustion in LiteRT vision encoder
+        val scaledBitmap = Bitmap.createScaledBitmap(finalBitmap, 448, 448, true)
+        if (scaledBitmap != finalBitmap) {
+            finalBitmap.recycle()
+        }
+        
         val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 50, out)
+        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
+        scaledBitmap.recycle()
         return out.toByteArray()
     }
 

@@ -2,12 +2,13 @@ package com.assistive.system.ai
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.util.Log
+import com.assistive.system.logging.AppLogger as Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.ExperimentalApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -79,6 +80,7 @@ class InferenceEngine(
         isMockMode = false
     }
 
+    @OptIn(ExperimentalApi::class)
     suspend fun initialize(): Boolean {
         if (isMockMode) return true
         return withContext(Dispatchers.IO) {
@@ -86,53 +88,73 @@ class InferenceEngine(
                 Log.i("InferenceEngine", "LoRA adapter detected at $loraAdapterPath")
             }
 
-            // 1. Try NPU first
             try {
-                Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on NPU...")
-                val config = EngineConfig(
-                    modelPath = modelPath,
-                    backend = Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir),
-                    visionBackend = Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir),
-                    cacheDir = context.cacheDir.absolutePath
-                )
-                val npuEngine = Engine(config)
-                npuEngine.initialize()
-                engine = npuEngine
-                isInitialized = true
-                isMockMode = false
-                Log.i("InferenceEngine", "LiteRT-LM Engine initialized successfully with NPU acceleration.")
-                return@withContext true
+                com.google.ai.edge.litertlm.ExperimentalFlags.visualTokenBudget = 140
+                Log.i("InferenceEngine", "Enabled ExperimentalFlags.visualTokenBudget = 140")
             } catch (e: Exception) {
-                Log.e("InferenceEngine", "NPU initialization failed: ${e.message}. Falling back to GPU.", e)
+                Log.w("InferenceEngine", "Failed to set ExperimentalFlags: ${e.message}")
             }
 
-            // 2. Try GPU second
-            try {
-                Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on GPU...")
-                val config = EngineConfig(
-                    modelPath = modelPath,
-                    backend = Backend.GPU(),
-                    visionBackend = Backend.GPU(),
-                    cacheDir = context.cacheDir.absolutePath
-                )
-                val gpuEngine = Engine(config)
-                gpuEngine.initialize()
-                engine = gpuEngine
-                isInitialized = true
-                isMockMode = false
-                Log.i("InferenceEngine", "LiteRT-LM Engine initialized successfully with GPU acceleration.")
-                return@withContext true
-            } catch (e: Exception) {
-                Log.e("InferenceEngine", "GPU initialization failed: ${e.message}. Falling back to CPU.", e)
+            val isEmulator = android.os.Build.HARDWARE.contains("goldfish")
+                    || android.os.Build.HARDWARE.contains("ranchu")
+                    || android.os.Build.PRODUCT.contains("sdk")
+                    || android.os.Build.MODEL.contains("Emulator")
+                    || android.os.Build.MODEL.contains("google_sdk")
+
+            if (!isEmulator) {
+                // 1. Try GPU first (recommended for most real devices running VLM)
+                try {
+                    Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on GPU...")
+                    val config = EngineConfig(
+                        modelPath = modelPath,
+                        backend = Backend.GPU(),
+                        visionBackend = Backend.GPU(),
+                        maxNumTokens = 1024,
+                        cacheDir = context.cacheDir.absolutePath
+                    )
+                    val gpuEngine = Engine(config)
+                    gpuEngine.initialize()
+                    engine = gpuEngine
+                    isInitialized = true
+                    isMockMode = false
+                    Log.i("InferenceEngine", "LiteRT-LM Engine initialized successfully with GPU acceleration.")
+                    return@withContext true
+                } catch (e: Exception) {
+                    Log.e("InferenceEngine", "GPU initialization failed: ${e.message}. Falling back to NPU.", e)
+                }
+
+                // 2. Try NPU second (uses hardware acceleration on chips supporting it)
+                try {
+                    Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on NPU...")
+                    val config = EngineConfig(
+                        modelPath = modelPath,
+                        backend = Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir),
+                        visionBackend = Backend.CPU(),
+                        maxNumTokens = 1024,
+                        cacheDir = context.cacheDir.absolutePath
+                    )
+                    val npuEngine = Engine(config)
+                    npuEngine.initialize()
+                    engine = npuEngine
+                    isInitialized = true
+                    isMockMode = false
+                    Log.i("InferenceEngine", "LiteRT-LM Engine initialized successfully with NPU acceleration.")
+                    return@withContext true
+                } catch (e: Exception) {
+                    Log.e("InferenceEngine", "NPU initialization failed: ${e.message}. Falling back to CPU.", e)
+                }
+            } else {
+                Log.i("InferenceEngine", "Running on Emulator. Bypassing GPU/NPU initialization to accelerate startup.")
             }
 
-            // 2. Fallback to CPU
+            // 3. Fallback to CPU
             try {
                 Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on CPU...")
                 val config = EngineConfig(
                     modelPath = modelPath,
                     backend = Backend.CPU(),
                     visionBackend = Backend.CPU(),
+                    maxNumTokens = 1024,
                     cacheDir = context.cacheDir.absolutePath
                 )
                 val cpuEngine = Engine(config)
@@ -179,6 +201,8 @@ class InferenceEngine(
         }
 
         // ======== REAL MODE ========
+        // Reuse the already initialized engine to avoid loading the model from disk on every request
+
         val currentEngine = engine ?: run {
             emit("เกิดข้อผิดพลาด: โมเดลไม่พร้อมใช้งาน")
             return@flow
