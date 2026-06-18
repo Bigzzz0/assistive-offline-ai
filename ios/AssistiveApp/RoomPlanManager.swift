@@ -93,14 +93,31 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         }
         
         // Speak results
+        var announcement = ""
         if let firstDoor = doorAnnouncements.first {
+            announcement = firstDoor
             lastAnnouncedTime = now
             AudioPipeline.shared.speak(firstDoor)
             HapticManager.shared.vibrateGeneralInfo()
         } else if let firstFurniture = furnitureAnnouncements.first {
+            announcement = firstFurniture
             lastAnnouncedTime = now
             AudioPipeline.shared.speak(firstFurniture)
             HapticManager.shared.vibrateGeneralInfo()
+        }
+        
+        if !announcement.isEmpty {
+            let userInfo: [AnyHashable: Any] = [
+                "aiResult": announcement,
+                "status": "กำลังสแกนห้อง..."
+            ]
+            NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
+        } else {
+            let userInfo: [AnyHashable: Any] = [
+                "aiResult": "ยังไม่พบประตูหรือเก้าอี้ใกล้ตัว",
+                "status": "กำลังสแกนหาวัตถุ..."
+            ]
+            NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
         }
     }
     

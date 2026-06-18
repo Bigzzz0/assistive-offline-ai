@@ -88,6 +88,12 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         guard !observations.isEmpty else {
             lastDetectedPeopleWorldPositions.removeAll()
             AudioPipeline.shared.updateDistanceAlert(distance: 999.0) // Safe
+            
+            let userInfo: [AnyHashable: Any] = [
+                "aiResult": "ไม่พบคนในระยะสแกน",
+                "status": "ไม่พบคนรอบตัว"
+            ]
+            NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
             return
         }
         
@@ -142,6 +148,26 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         
         self.lastDetectedPeopleWorldPositions = currentPositions
         AudioPipeline.shared.updateDistanceAlert(distance: minDistance)
+        
+        let status: String
+        let result: String
+        if minDistance < 999.0 {
+            status = String(format: "พบคนใกล้ที่สุด %.2f เมตร", minDistance)
+            if minDistance < 1.5 {
+                result = String(format: "⚠️ เตือน! มีคนอยู่ใกล้เกินไป (%.1f ม.) กรุณาเว้นระยะห่าง", minDistance)
+            } else {
+                result = String(format: "พบคนในระยะปลอดภัย (%.1f ม.)", minDistance)
+            }
+        } else {
+            status = "ไม่พบคนรอบตัว"
+            result = "ไม่พบคนในระยะสแกน"
+        }
+        
+        let userInfo: [AnyHashable: Any] = [
+            "aiResult": result,
+            "status": status
+        ]
+        NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
     }
     
     private func projectToWorld(center: CGPoint, depth: Float, frame: ARFrame) -> simd_float3 {

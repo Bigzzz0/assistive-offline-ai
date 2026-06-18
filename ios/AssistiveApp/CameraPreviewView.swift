@@ -35,3 +35,18 @@ struct CameraPreviewView: UIViewRepresentable {
         var previewLayer: AVCaptureVideoPreviewLayer?
     }
 }
+
+import ARKit
+
+struct ARPreviewView: UIViewRepresentable {
+    let session: ARSession
+    
+    func makeUIView(context: Context) -> ARSCNView {
+        let sceneView = ARSCNView(frame: .zero)
+        sceneView.session = session
+        sceneView.backgroundColor = .black
+        return sceneView
+    }
+    
+    func updateUIView(_ uiView: ARSCNView, context: Context) {}
+}

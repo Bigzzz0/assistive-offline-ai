@@ -136,11 +136,21 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         
         // 1. Extract Index Fingertip
         guard let handObservation = handPoseRequest.results?.first else {
+            let userInfo: [AnyHashable: Any] = [
+                "aiResult": "",
+                "status": "ไม่พบมือหรือนิ้วชี้"
+            ]
+            NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
             return // No hand detected
         }
         
         guard let indexTipJoint = try? handObservation.recognizedPoint(.indexTip),
               indexTipJoint.confidence > 0.3 else {
+            let userInfo: [AnyHashable: Any] = [
+                "aiResult": "",
+                "status": "นิ้วชี้ไม่ชัดเจน"
+            ]
+            NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
             return // Index tip not confident
         }
         
@@ -188,6 +198,14 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
             // System sound ID 1104 is a gentle Tink sound
             AudioServicesPlaySystemSound(1104)
         }
+        
+        // Post notification about finger distance and hovered text
+        let status = String(format: "นิ้วชี้ห่างจากข้อความใกล้สุด %.2f", minDistance)
+        let userInfo: [AnyHashable: Any] = [
+            "aiResult": detectedText != nil ? "👉 ชี้แล้วอ่าน: \(detectedText!)" : "ยื่นนิ้วชี้ไปเพื่ออ่านตัวหนังสือ",
+            "status": status
+        ]
+        NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
         
         // 4. Speak text if hovering over it
         if let text = detectedText, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

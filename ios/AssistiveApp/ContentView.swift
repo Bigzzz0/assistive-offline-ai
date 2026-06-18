@@ -126,8 +126,20 @@ struct ContentView: View {
                 
                 // ---- Live Camera Viewport ----
                 ZStack {
-                    if cameraAuthorized, let session = VisionPipeline.shared.session {
-                        CameraPreviewView(session: session)
+                    if cameraAuthorized {
+                        if currentMode == .peopleDetection, let arSession = ARDepthPipeline.shared.session {
+                            ARPreviewView(session: arSession)
+                        } else if currentMode == .roomPlan, let roomSession = RoomPlanManager.shared.session {
+                            #if canImport(RoomPlan)
+                            ARPreviewView(session: roomSession.arSession)
+                            #else
+                            Color.black
+                            #endif
+                        } else if let session = VisionPipeline.shared.session {
+                            CameraPreviewView(session: session)
+                        } else {
+                            Color.black
+                        }
                     } else {
                         Color.black
                         VStack {
@@ -583,6 +595,16 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("InferenceEngineStateDidChange"))) { _ in
             isMockMode = InferenceEngine.shared.isMock()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AccessibilityPipelineDidUpdate"))) { notification in
+            if let userInfo = notification.userInfo {
+                if let aiResult = userInfo["aiResult"] as? String {
+                    self.aiResultText = aiResult
+                }
+                if let status = userInfo["status"] as? String {
+                    self.statusText = status
+                }
+            }
+        }
     }
     
     // MARK: - Camera Permission
@@ -671,6 +693,10 @@ struct ContentView: View {
         #if canImport(RoomPlan)
         RoomPlanManager.shared.stopSession()
         #endif
+        
+        // Reset descriptions for responsive UI feedback
+        aiResultText = ""
+        statusText = "สลับเป็น\(newMode.speech)"
         
         if newMode == .roomPlan {
             VisionPipeline.shared.stopSession()
