@@ -12,9 +12,13 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     private var lastAnnouncedTime: Double = 0.0
     private let announcementInterval: Double = 4.0 // Announce every 4 seconds to limit audio overhead
     
+    private var mockTimer: Timer?
+    private var mockDistance: Float = 3.0
+    
     func startSession() {
         guard DeviceCapabilities.supportsLiDAR() else {
-            LogStore.shared.log("[RoomPlan] LiDAR not supported on this device. RoomPlan disabled.")
+            LogStore.shared.log("[RoomPlan] LiDAR not supported on this device. Starting simulated RoomPlan...")
+            startMockSession()
             return
         }
         
@@ -32,12 +36,54 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     }
     
     func stopSession() {
+        mockTimer?.invalidate()
+        mockTimer = nil
+        
         session?.stop()
         session = nil
         
         // Stop ARDepthPipeline and restore throttleInterval
         ARDepthPipeline.shared.stopSession()
         ARDepthPipeline.shared.throttleInterval = 0.20
+    }
+    
+    private func startMockSession() {
+        mockDistance = 3.0
+        mockTimer?.invalidate()
+        mockTimer = Timer.scheduledTimer(withTimeInterval: announcementInterval, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            
+            // Simulate walking towards a door, then finding a chair
+            self.mockDistance -= 0.4
+            if self.mockDistance < 0.5 {
+                self.mockDistance = 3.0
+            }
+            
+            let result: String
+            let status = "กำลังสแกนหาวัตถุ..."
+            
+            if self.mockDistance > 1.5 {
+                result = String(format: "พบประตู ห่าง %.1f เมตร สถานะ เปิดอยู่ (จำลอง)", self.mockDistance)
+            } else {
+                result = String(format: "พบเก้าอี้ ห่าง %.1f เมตร สถานะ เก้าอี้ว่าง (จำลอง)", self.mockDistance)
+            }
+            
+            AudioPipeline.shared.speak(result)
+            HapticManager.shared.vibrateGeneralInfo()
+            
+            let userInfo: [AnyHashable: Any] = [
+                "aiResult": result,
+                "status": status
+            ]
+            NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
+        }
+        
+        // Immediately post initial scanning message
+        let userInfo: [AnyHashable: Any] = [
+            "aiResult": "กำลังจำลองการสแกนหาประตูและเก้าอี้...",
+            "status": "กำลังเริ่มสแกน..."
+        ]
+        NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
     }
     
     func pauseSession() {
@@ -58,11 +104,17 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         let now = CACurrentMediaTime()
         guard now - lastAnnouncedTime >= announcementInterval else { return }
         
+        // Get current camera position relative to session origin
+        var cameraPos = simd_make_float3(0, 0, 0)
+        if let cameraTransform = session.arSession.currentFrame?.camera.transform {
+            cameraPos = simd_make_float3(cameraTransform.columns.3.x, cameraTransform.columns.3.y, cameraTransform.columns.3.z)
+        }
+        
         var doorAnnouncements: [String] = []
         for door in room.doors {
             // Transform matrix columns.3 gives the 3D position relative to origin
             let doorPos = simd_make_float3(door.transform.columns.3.x, door.transform.columns.3.y, door.transform.columns.3.z)
-            let distance = simd_distance(doorPos, simd_make_float3(0, 0, 0))
+            let distance = simd_distance(doorPos, cameraPos)
             
             var isOpenText = "ปิดอยู่"
             if case let .door(isOpen) = door.category {
@@ -82,7 +134,7 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         for object in room.objects {
             if object.category == .chair || object.category == .sofa {
                 let objectPos = simd_make_float3(object.transform.columns.3.x, object.transform.columns.3.y, object.transform.columns.3.z)
-                let distance = simd_distance(objectPos, simd_make_float3(0, 0, 0))
+                let distance = simd_distance(objectPos, cameraPos)
                 
                 let isOccupied = checkOccupancy(for: object)
                 let statusText = isOccupied ? "ไม่ว่าง" : "เก้าอี้ว่าง"
