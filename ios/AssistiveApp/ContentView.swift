@@ -58,6 +58,7 @@ struct ContentView: View {
     @State private var showQADialog: Bool = false
     @State private var qaText: String = ""
     @State private var hasCapturedImage: Bool = false
+    @State private var speechRateState: Float = AudioPipeline.shared.speechRate
     
     // Camera permission state
     @State private var cameraAuthorized: Bool = false
@@ -127,6 +128,75 @@ struct ContentView: View {
                 )
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("โหมดใช้งานสัมผัสปัจจุบันคือ \(currentMode.speech)")
+                .accessibilityValue("ปัดขึ้นหรือปัดลงเพื่อสลับโหมด")
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment:
+                        currentMode = currentMode.next()
+                        announceMode()
+                    case .decrement:
+                        currentMode = currentMode.previous()
+                        announceMode()
+                    @unknown default:
+                        break
+                    }
+                }
+                
+                // ---- TTS Speech Speed Control ----
+                HStack {
+                    Image(systemName: "speedometer")
+                        .foregroundColor(.cyan)
+                    Text("ความเร็วเสียงพูด:")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.gray)
+                    Spacer()
+                    let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
+                    let levelIndex = Int(round((speechRateState - 0.25) / 0.05))
+                    let speedText = levelIndex >= 0 && levelIndex < levelWords.count ? "ระดับ \(levelWords[levelIndex])" : String(format: "%.2f", speechRateState)
+                    Text(speedText)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.cyan)
+                }
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(Color(red: 0.08, green: 0.08, blue: 0.08))
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
+                )
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("ปรับความเร็วเสียงพูด")
+                .accessibilityValue(
+                    Int(round((speechRateState - 0.25) / 0.05)) >= 0 && Int(round((speechRateState - 0.25) / 0.05)) < 13 ? "ระดับ \(["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"][Int(round((speechRateState - 0.25) / 0.05))])" : String(format: "%.2f", speechRateState)
+                )
+                .accessibilityHint("ปัดขึ้นเพื่อเพิ่มความเร็ว ปัดลงเพื่อลดความเร็ว")
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment:
+                        let newRate = AudioPipeline.shared.increaseSpeechRate()
+                        self.speechRateState = newRate
+                        let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
+                        let levelIndex = Int(round((newRate - 0.25) / 0.05))
+                        if levelIndex >= 0 && levelIndex < levelWords.count {
+                            speakText("ความเร็วระดับ\(levelWords[levelIndex])")
+                        } else {
+                            speakText(String(format: "ความเร็ว %.2f", newRate))
+                        }
+                    case .decrement:
+                        let newRate = AudioPipeline.shared.decreaseSpeechRate()
+                        self.speechRateState = newRate
+                        let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
+                        let levelIndex = Int(round((newRate - 0.25) / 0.05))
+                        if levelIndex >= 0 && levelIndex < levelWords.count {
+                            speakText("ความเร็วระดับ\(levelWords[levelIndex])")
+                        } else {
+                            speakText(String(format: "ความเร็ว %.2f", newRate))
+                        }
+                    @unknown default:
+                        break
+                    }
+                }
                 
                 // ---- Live Camera Viewport ----
                 ZStack {
@@ -617,6 +687,7 @@ struct ContentView: View {
                 } else {
                     if dy > 100 { // Swipe Down -> decrease speech rate
                         let newRate = AudioPipeline.shared.decreaseSpeechRate()
+                        self.speechRateState = newRate
                         let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
                         let levelIndex = Int(round((newRate - 0.25) / 0.05))
                         if levelIndex >= 0 && levelIndex < levelWords.count {
@@ -627,6 +698,7 @@ struct ContentView: View {
                         lastModeChangeTime = Date()
                     } else if dy < -100 { // Swipe Up -> increase speech rate
                         let newRate = AudioPipeline.shared.increaseSpeechRate()
+                        self.speechRateState = newRate
                         let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
                         let levelIndex = Int(round((newRate - 0.25) / 0.05))
                         if levelIndex >= 0 && levelIndex < levelWords.count {
@@ -645,6 +717,7 @@ struct ContentView: View {
             statusText = "ระบบพร้อมทำงาน"
             handleModeChange(to: currentMode)
             setupVolumeButtonObserver()
+            speechRateState = AudioPipeline.shared.speechRate
         }
         .onDisappear {
             volumeObserver = nil
@@ -744,7 +817,7 @@ struct ContentView: View {
         }
         
         isProcessing = true
-        vibrateHaptic(level: 1)
+        VisionPipeline.shared.isProcessing = true
         let speechPrompt: String
         switch command {
         case "อ่าน": speechPrompt = "กำลังอ่านหนังสือ"
@@ -765,6 +838,7 @@ struct ContentView: View {
                 self.aiResultText = "กรุณาอนุญาตการใช้กล้องและลองอีกครั้ง"
                 self.speakText(self.aiResultText)
                 self.isProcessing = false
+                VisionPipeline.shared.isProcessing = false
                 return
             }
             
@@ -778,6 +852,7 @@ struct ContentView: View {
                 self.speakText(result)
                 self.vibrateHaptic(level: 2)
                 self.isProcessing = false
+                VisionPipeline.shared.isProcessing = false
                 self.hasCapturedImage = true
             }
         }
@@ -841,6 +916,7 @@ struct ContentView: View {
         guard !question.isEmpty else { return }
         
         isProcessing = true
+        VisionPipeline.shared.isProcessing = true
         vibrateHaptic(level: 1)
         speakText("กำลังวิเคราะห์คำถาม")
         statusText = "กำลังวิเคราะห์คำถาม..."
@@ -851,6 +927,7 @@ struct ContentView: View {
             self.speakText(result)
             self.vibrateHaptic(level: 2)
             self.isProcessing = false
+            VisionPipeline.shared.isProcessing = false
             self.qaText = ""
         }
     }

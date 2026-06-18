@@ -8,6 +8,8 @@ import AudioToolbox
 class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     static let shared = VisionPipeline()
     
+    var isProcessing = false
+    
     // Public session for CameraPreviewView binding
     private(set) var session: AVCaptureSession?
     
@@ -254,6 +256,10 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     }
     
     private func runDocumentAutoCapture(pixelBuffer: CVPixelBuffer, now: Double) {
+        guard !isProcessing else {
+            stableStartTime = nil
+            return
+        }
         let request = VNDetectRectanglesRequest()
         request.minimumConfidence = 0.5
         request.minimumAspectRatio = 0.5
