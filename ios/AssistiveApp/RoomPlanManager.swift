@@ -158,6 +158,7 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         }
         
         var minDistance: Float = 999.0
+        var closestObstacleLocalPos: simd_float3? = nil
         let now = ProcessInfo.processInfo.systemUptime
         var announcementsToMake: [(text: String, distance: Float, id: UUID, state: AnnouncedObjectState)] = []
         
@@ -168,6 +169,10 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
             
             if distance < minDistance {
                 minDistance = distance
+                if let cameraTransform = session.arSession.currentFrame?.camera.transform {
+                    let localPos4 = cameraTransform.inverse * simd_make_float4(doorPos.x, doorPos.y, doorPos.z, 1.0)
+                    closestObstacleLocalPos = simd_make_float3(localPos4.x, localPos4.y, localPos4.z)
+                }
             }
             
             var isOpenText = "ปิดอยู่"
@@ -225,6 +230,10 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
             
             if distance < minDistance {
                 minDistance = distance
+                if let cameraTransform = session.arSession.currentFrame?.camera.transform {
+                    let localPos4 = cameraTransform.inverse * simd_make_float4(objectPos.x, objectPos.y, objectPos.z, 1.0)
+                    closestObstacleLocalPos = simd_make_float3(localPos4.x, localPos4.y, localPos4.z)
+                }
             }
             
             var categoryName = ""
@@ -311,7 +320,7 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         }
         
         // 4. Update the real-time distance warning tone/haptics for the closest obstacle
-        AudioPipeline.shared.updateDistanceAlert(distance: minDistance)
+        AudioPipeline.shared.updateDistanceAlert(distance: minDistance, position: closestObstacleLocalPos)
         
         // 5. Trigger spoken announcements if any, sorted by proximity (closest first)
         if !announcementsToMake.isEmpty {

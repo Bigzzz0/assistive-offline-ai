@@ -1,11 +1,13 @@
 import AVFoundation
 import UIKit
+import simd
 
 class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
     static let shared = AudioPipeline()
     
     private let speechSynthesizer = AVSpeechSynthesizer()
     private var audioEngine = AVAudioEngine()
+    private var environmentNode = AVAudioEnvironmentNode()
     private var onSpeechDone: (() -> Void)?
     
     private(set) var speechRate: Float = {
@@ -25,6 +27,7 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
         super.init()
         speechSynthesizer.delegate = self
         setupAudioSession()
+        setupEnvironmentNode()
     }
     
     private func setupAudioSession() {
@@ -38,6 +41,16 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
         } catch {
             print("Failed to set up AVAudioSession: \(error.localizedDescription)")
         }
+    }
+    
+    private func setupEnvironmentNode() {
+        audioEngine.attach(environmentNode)
+        let outputFormat = audioEngine.outputNode.outputFormat(forBus: 0)
+        audioEngine.connect(environmentNode, to: audioEngine.mainMixerNode, format: outputFormat)
+        
+        // Listener sits at the origin looking forward
+        environmentNode.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
+        environmentNode.listenerAngularOrientation = AVAudio3DAngularOrientation(roll: 0, pitch: 0, yaw: 0)
     }
     
     func startTone() {
@@ -69,7 +82,9 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
         audioEngine.attach(sourceNode)
         
         let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
-        audioEngine.connect(sourceNode, to: audioEngine.mainMixerNode, format: format)
+        audioEngine.connect(sourceNode, to: environmentNode, format: format)
+        sourceNode.renderingAlgorithm = .HRTFHQ
+        sourceNode.position = AVAudio3DPoint(x: 0, y: 0, z: -1.0) // Default straight ahead
         
         if !audioEngine.isRunning {
             try? audioEngine.start()
@@ -82,7 +97,7 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
         
         guard isPlayingTone, let sourceNode = toneSourceNode else { return }
         isPlayingTone = false
-        audioEngine.disconnectNodeInput(audioEngine.mainMixerNode)
+        audioEngine.disconnectNodeInput(environmentNode)
         audioEngine.detach(sourceNode)
         toneSourceNode = nil
     }
@@ -95,7 +110,7 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
     
-    func updateDistanceAlert(distance: Float) {
+    func updateDistanceAlert(distance: Float, position: simd_float3? = nil) {
         let freq: Float
         let interval: Double
         let vol: Float
@@ -125,10 +140,15 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
                 HapticManager.shared.vibrateWarning()
             }
             
+            if let pos = position, let node = self.toneSourceNode {
+                node.position = AVAudio3DPoint(x: pos.x, y: pos.y, z: pos.z)
+            }
+            
             self.setToneFrequency(freq, volume: vol)
             self.setupBeepPulsing(interval: interval)
         }
     }
+
     
     private func setupBeepPulsing(interval: Double) {
         pulseTimer?.invalidate()

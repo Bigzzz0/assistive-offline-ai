@@ -151,6 +151,7 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         
         var minDistance: Float = 999.0
         var currentPositions: [simd_float3] = []
+        var closestPersonLocalPos: simd_float3? = nil
         
         for observation in observations {
             let bbox = observation.boundingBox // Normalized [0, 1] bottom-left origin in oriented space
@@ -192,17 +193,21 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
                 distance = 1.5 / Float(bbox.height)
             }
             
-            if distance < minDistance {
-                minDistance = distance
-            }
-            
             // Project 2D raw center coordinate and depth into 3D world space
             let projected3D = projectToWorld(rawCenter: rawCenter, depth: distance, frame: frame)
             currentPositions.append(projected3D)
+            
+            if distance < minDistance {
+                minDistance = distance
+                // Calculate local coordinate relative to the camera for 3D Spatial Audio
+                let cameraTransform = frame.camera.transform
+                let localPos4 = cameraTransform.inverse * simd_make_float4(projected3D.x, projected3D.y, projected3D.z, 1.0)
+                closestPersonLocalPos = simd_make_float3(localPos4.x, localPos4.y, localPos4.z)
+            }
         }
         
         self.lastDetectedPeopleWorldPositions = currentPositions
-        AudioPipeline.shared.updateDistanceAlert(distance: minDistance)
+        AudioPipeline.shared.updateDistanceAlert(distance: minDistance, position: closestPersonLocalPos)
         
         let status: String
         let result: String
