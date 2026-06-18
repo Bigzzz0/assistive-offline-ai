@@ -348,9 +348,7 @@ class InferenceEngine {
             Task.detached(priority: .userInitiated) {
                 do {
                     LogStore.shared.log("[InferenceEngine] Re-creating conversation to clear context history...")
-                    guard let conversation = try await engine.createConversation() else {
-                        throw NSError(domain: "InferenceEngine", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create conversation: returned nil"])
-                    }
+                    let localConversation = try await engine.createConversation()
                     
                     LogStore.shared.log("[InferenceEngine] Detached background task started. Constructing Message payload...")
                     let prompt = "\(self.systemPrompt)\n\nคำสั่ง: \(promptText)"
@@ -363,7 +361,7 @@ class InferenceEngine {
                     LogStore.shared.log("[InferenceEngine] Sending message payload and starting stream...")
                     
                     // sendMessageStream returns an AsyncThrowingStream of Message chunks
-                    for try await chunk in conversation.sendMessageStream(message) {
+                    for try await chunk in localConversation.sendMessageStream(message) {
                         let textChunk = chunk.toString
                         if accumulatedText.isEmpty {
                             LogStore.shared.log("[InferenceEngine] First VLM streamed token chunk received: \(textChunk)")
