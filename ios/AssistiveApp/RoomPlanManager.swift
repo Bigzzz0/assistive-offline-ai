@@ -13,6 +13,8 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     private let announcementInterval: Double = 4.0 // Announce every 4 seconds to limit audio overhead
     
     private var delegateProxy: ARSessionDelegateProxy?
+    private var delegatePollTimer: Timer?
+    private var pollAttempts = 0
     private var mockTimer: Timer?
     private var mockDistance: Float = 3.0
     
@@ -38,17 +40,38 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         let config = RoomCaptureSession.Configuration()
         session.run(configuration: config)
         
-        // Intercept/wrap RoomCaptureSession's delegate with proxy delegate
-        let originalDelegate = session.arSession.delegate
-        LogStore.shared.log("[RoomPlan] Original ARSession delegate: \(String(describing: originalDelegate))")
-        let proxy = ARSessionDelegateProxy(original: originalDelegate, secondary: ARDepthPipeline.shared)
-        self.delegateProxy = proxy
-        session.arSession.delegate = proxy
+        // Poll for asynchronous delegate configuration
+        pollAttempts = 0
+        delegatePollTimer?.invalidate()
+        delegatePollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+            guard let self = self, let session = self.session else {
+                timer.invalidate()
+                return
+            }
+            self.pollAttempts += 1
+            if let currentDelegate = session.arSession.delegate {
+                if !(currentDelegate is ARSessionDelegateProxy) {
+                    LogStore.shared.log("[RoomPlan] Found original delegate after \(self.pollAttempts) attempts: \(type(of: currentDelegate))")
+                    let proxy = ARSessionDelegateProxy(original: currentDelegate, secondary: ARDepthPipeline.shared)
+                    self.delegateProxy = proxy
+                    session.arSession.delegate = proxy
+                    timer.invalidate()
+                }
+            } else if self.pollAttempts >= 30 {
+                LogStore.shared.log("[RoomPlan] Polling delegate timed out. Setting proxy with nil original delegate.")
+                let proxy = ARSessionDelegateProxy(original: nil, secondary: ARDepthPipeline.shared)
+                self.delegateProxy = proxy
+                session.arSession.delegate = proxy
+                timer.invalidate()
+            }
+        }
     }
     
     func stopSession() {
         mockTimer?.invalidate()
         mockTimer = nil
+        delegatePollTimer?.invalidate()
+        delegatePollTimer = nil
         
         session?.stop()
         session = nil
@@ -99,6 +122,8 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     }
     
     func pauseSession() {
+        delegatePollTimer?.invalidate()
+        delegatePollTimer = nil
         session?.stop()
         delegateProxy = nil // Release proxy
         ARDepthPipeline.shared.deactivate()
@@ -110,13 +135,33 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         let config = RoomCaptureSession.Configuration()
         session.run(configuration: config)
         
-        // Restore delegate proxy and active state
-        let originalDelegate = session.arSession.delegate
-        let proxy = ARSessionDelegateProxy(original: originalDelegate, secondary: ARDepthPipeline.shared)
-        self.delegateProxy = proxy
-        session.arSession.delegate = proxy
-        
         ARDepthPipeline.shared.activate(with: session.arSession)
+        
+        // Poll for asynchronous delegate configuration
+        pollAttempts = 0
+        delegatePollTimer?.invalidate()
+        delegatePollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+            guard let self = self, let session = self.session else {
+                timer.invalidate()
+                return
+            }
+            self.pollAttempts += 1
+            if let currentDelegate = session.arSession.delegate {
+                if !(currentDelegate is ARSessionDelegateProxy) {
+                    LogStore.shared.log("[RoomPlan] Found original delegate after resume: \(type(of: currentDelegate))")
+                    let proxy = ARSessionDelegateProxy(original: currentDelegate, secondary: ARDepthPipeline.shared)
+                    self.delegateProxy = proxy
+                    session.arSession.delegate = proxy
+                    timer.invalidate()
+                }
+            } else if self.pollAttempts >= 30 {
+                let proxy = ARSessionDelegateProxy(original: nil, secondary: ARDepthPipeline.shared)
+                self.delegateProxy = proxy
+                session.arSession.delegate = proxy
+                timer.invalidate()
+            }
+        }
+        
         LogStore.shared.log("[RoomPlan] Session resumed.")
     }
     
