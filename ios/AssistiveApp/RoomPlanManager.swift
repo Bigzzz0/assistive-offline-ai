@@ -12,6 +12,7 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     private var lastAnnouncedTime: Double = 0.0
     private let announcementInterval: Double = 4.0 // Announce every 4 seconds to limit audio overhead
     
+    private var delegateProxy: ARSessionDelegateProxy?
     private var mockTimer: Timer?
     private var mockDistance: Float = 3.0
     
@@ -36,6 +37,13 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         
         let config = RoomCaptureSession.Configuration()
         session.run(configuration: config)
+        
+        // Intercept/wrap RoomCaptureSession's delegate with proxy delegate
+        let originalDelegate = session.arSession.delegate
+        LogStore.shared.log("[RoomPlan] Original ARSession delegate: \(String(describing: originalDelegate))")
+        let proxy = ARSessionDelegateProxy(original: originalDelegate, secondary: ARDepthPipeline.shared)
+        self.delegateProxy = proxy
+        session.arSession.delegate = proxy
     }
     
     func stopSession() {
@@ -44,6 +52,7 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         
         session?.stop()
         session = nil
+        delegateProxy = nil // Release proxy to avoid retain cycles/leaks
         
         // Disable ARDepthPipeline and restore throttleInterval
         ARDepthPipeline.shared.deactivate()
@@ -91,6 +100,7 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     
     func pauseSession() {
         session?.stop()
+        delegateProxy = nil // Release proxy
         ARDepthPipeline.shared.deactivate()
         LogStore.shared.log("[RoomPlan] Session paused (GPU yield).")
     }
@@ -100,7 +110,12 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         let config = RoomCaptureSession.Configuration()
         session.run(configuration: config)
         
-        // Restore delegate and active state
+        // Restore delegate proxy and active state
+        let originalDelegate = session.arSession.delegate
+        let proxy = ARSessionDelegateProxy(original: originalDelegate, secondary: ARDepthPipeline.shared)
+        self.delegateProxy = proxy
+        session.arSession.delegate = proxy
+        
         ARDepthPipeline.shared.activate(with: session.arSession)
         LogStore.shared.log("[RoomPlan] Session resumed.")
     }
@@ -134,15 +149,45 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         
         var furnitureAnnouncements: [String] = []
         for object in room.objects {
-            if object.category == .chair || object.category == .sofa {
-                let objectPos = simd_make_float3(object.transform.columns.3.x, object.transform.columns.3.y, object.transform.columns.3.z)
-                let distance = simd_distance(objectPos, cameraPos)
-                
+            let objectPos = simd_make_float3(object.transform.columns.3.x, object.transform.columns.3.y, object.transform.columns.3.z)
+            let distance = simd_distance(objectPos, cameraPos)
+            
+            var categoryName = ""
+            var statusText = ""
+            
+            switch object.category {
+            case .chair:
+                categoryName = "เก้าอี้"
                 let isOccupied = checkOccupancy(for: object)
-                let statusText = isOccupied ? "ไม่ว่าง" : "เก้าอี้ว่าง"
-                
-                let categoryName = object.category == .chair ? "เก้าอี้" : "โซฟา"
-                furnitureAnnouncements.append(String(format: "พบ%@ ห่าง %.1f เมตร สถานะ %@", categoryName, distance, statusText))
+                statusText = isOccupied ? "ไม่ว่าง" : "เก้าอี้ว่าง"
+            case .sofa:
+                categoryName = "โซฟา"
+                let isOccupied = checkOccupancy(for: object)
+                statusText = isOccupied ? "ไม่ว่าง" : "โซฟานั่งได้"
+            case .bed:
+                categoryName = "เตียง"
+            case .table:
+                categoryName = "โต๊ะ"
+            case .storage:
+                categoryName = "ตู้"
+            case .toilet:
+                categoryName = "ชักโครก"
+            case .sink:
+                categoryName = "อ่างล้างมือ"
+            case .refrigerator:
+                categoryName = "ตู้เย็น"
+            default:
+                continue
+            }
+            
+            if !categoryName.isEmpty {
+                let announcement: String
+                if !statusText.isEmpty {
+                    announcement = String(format: "พบ%@ ห่าง %.1f เมตร สถานะ %@", categoryName, distance, statusText)
+                } else {
+                    announcement = String(format: "พบ%@ ห่าง %.1f เมตร", categoryName, distance)
+                }
+                furnitureAnnouncements.append(announcement)
             }
         }
         
@@ -190,6 +235,77 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
             }
         }
         return false
+    }
+}
+
+// Proxy delegate to broadcast ARSession delegate calls to both RoomPlan's internal listener and ARDepthPipeline
+@available(iOS 16.0, *)
+class ARSessionDelegateProxy: NSObject, ARSessionDelegate {
+    private weak var originalDelegate: ARSessionDelegate?
+    private weak var secondaryDelegate: ARSessionDelegate?
+    
+    init(original: ARSessionDelegate?, secondary: ARSessionDelegate?) {
+        self.originalDelegate = original
+        self.secondaryDelegate = secondary
+        super.init()
+    }
+    
+    override func responds(to aSelector: Selector!) -> Bool {
+        if super.responds(to: aSelector) {
+            return true
+        }
+        return (originalDelegate?.responds(to: aSelector) ?? false) || (secondaryDelegate?.responds(to: aSelector) ?? false)
+    }
+    
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        originalDelegate?.session?(session, didUpdate: frame)
+        secondaryDelegate?.session?(session, didUpdate: frame)
+    }
+    
+    func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
+        originalDelegate?.session?(session, didAdd: anchors)
+        secondaryDelegate?.session?(session, didAdd: anchors)
+    }
+    
+    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+        originalDelegate?.session?(session, didUpdate: anchors)
+        secondaryDelegate?.session?(session, didUpdate: anchors)
+    }
+    
+    func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
+        originalDelegate?.session?(session, didRemove: anchors)
+        secondaryDelegate?.session?(session, didRemove: anchors)
+    }
+    
+    func session(_ session: ARSession, didFailWithError error: Error) {
+        originalDelegate?.session?(session, didFailWithError: error)
+        secondaryDelegate?.session?(session, didFailWithError: error)
+    }
+    
+    func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+        originalDelegate?.session?(session, cameraDidChangeTrackingState: camera)
+        secondaryDelegate?.session?(session, cameraDidChangeTrackingState: camera)
+    }
+    
+    func sessionWasInterrupted(_ session: ARSession) {
+        originalDelegate?.sessionWasInterrupted?(session)
+        secondaryDelegate?.sessionWasInterrupted?(session)
+    }
+    
+    func sessionInterruptionEnded(_ session: ARSession) {
+        originalDelegate?.sessionInterruptionEnded?(session)
+        secondaryDelegate?.sessionInterruptionEnded?(session)
+    }
+    
+    func sessionShouldAttemptRelocalization(_ session: ARSession) -> Bool {
+        let orig = originalDelegate?.sessionShouldAttemptRelocalization?(session) ?? false
+        let sec = secondaryDelegate?.sessionShouldAttemptRelocalization?(session) ?? false
+        return orig || sec
+    }
+    
+    func session(_ session: ARSession, didOutputCollaborationData data: ARSession.CollaborationData) {
+        originalDelegate?.session?(session, didOutputCollaborationData: data)
+        secondaryDelegate?.session?(session, didOutputCollaborationData: data)
     }
 }
 #endif

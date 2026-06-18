@@ -60,8 +60,8 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
     
     func activate(with arSession: ARSession) {
         self.isActive = true
-        arSession.delegate = self
-        LogStore.shared.log("[ARDepthPipeline] Activated with shared ARSession delegate.")
+        // Note: When shared, delegate assignments are handled externally via proxy in RoomPlanManager.
+        LogStore.shared.log("[ARDepthPipeline] Activated with shared ARSession.")
     }
     
     func deactivate() {
