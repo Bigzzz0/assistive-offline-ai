@@ -129,7 +129,7 @@ class InferenceEngine(
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir),
-                        visionBackend = Backend.CPU(),
+                        visionBackend = Backend.GPU(),
                         maxNumTokens = 1024,
                         cacheDir = context.cacheDir.absolutePath
                     )
@@ -153,7 +153,7 @@ class InferenceEngine(
                 val config = EngineConfig(
                     modelPath = modelPath,
                     backend = Backend.CPU(),
-                    visionBackend = Backend.CPU(),
+                    visionBackend = Backend.GPU(),
                     maxNumTokens = 1024,
                     cacheDir = context.cacheDir.absolutePath
                 )
