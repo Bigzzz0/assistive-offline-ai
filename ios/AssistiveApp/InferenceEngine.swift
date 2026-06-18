@@ -348,7 +348,9 @@ class InferenceEngine {
             Task.detached(priority: .userInitiated) {
                 do {
                     LogStore.shared.log("[InferenceEngine] Re-creating conversation to clear context history...")
-                    let conversation = try await engine.createConversation()
+                    guard let conversation = try await engine.createConversation() else {
+                        throw NSError(domain: "InferenceEngine", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create conversation: returned nil"])
+                    }
                     
                     LogStore.shared.log("[InferenceEngine] Detached background task started. Constructing Message payload...")
                     let prompt = "\(self.systemPrompt)\n\nคำสั่ง: \(promptText)"
