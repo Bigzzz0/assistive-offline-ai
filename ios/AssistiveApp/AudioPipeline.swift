@@ -50,7 +50,10 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
         
         // Listener sits at the origin looking forward
         environmentNode.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
-        environmentNode.listenerAngularOrientation = AVAudio3DAngularOrientation(roll: 0, pitch: 0, yaw: 0)
+        environmentNode.listenerVectorOrientation = AVAudio3DVectorOrientation(
+            forward: AVAudio3DVector(x: 0, y: 0, z: -1.0),
+            up: AVAudio3DVector(x: 0, y: 1.0, z: 0)
+        )
     }
     
     func startTone() {
@@ -83,8 +86,10 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
         
         let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
         audioEngine.connect(sourceNode, to: environmentNode, format: format)
-        sourceNode.renderingAlgorithm = .HRTFHQ
-        sourceNode.position = AVAudio3DPoint(x: 0, y: 0, z: -1.0) // Default straight ahead
+        
+        // Configure 3D Spatial parameters on the Environment Node's input bus
+        environmentNode.setRenderingAlgorithm(.HRTFHQ, forBus: 0)
+        environmentNode.setPosition(AVAudio3DPoint(x: 0, y: 0, z: -1.0), forBus: 0) // Default straight ahead
         
         if !audioEngine.isRunning {
             try? audioEngine.start()
@@ -140,8 +145,8 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
                 HapticManager.shared.vibrateWarning()
             }
             
-            if let pos = position, let node = self.toneSourceNode {
-                node.position = AVAudio3DPoint(x: pos.x, y: pos.y, z: pos.z)
+            if let pos = position {
+                self.environmentNode.setPosition(AVAudio3DPoint(x: pos.x, y: pos.y, z: pos.z), forBus: 0)
             }
             
             self.setToneFrequency(freq, volume: vol)
