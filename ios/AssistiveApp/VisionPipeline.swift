@@ -229,11 +229,7 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
                 lastSpokenTime = now
                 
                 // Trigger tactile feedback (medium impact)
-                DispatchQueue.main.async {
-                    let generator = UIImpactFeedbackGenerator(style: .medium)
-                    generator.prepare()
-                    generator.impactOccurred()
-                }
+                HapticManager.shared.vibrateGeneralInfo()
                 
                 // Speak the text
                 AudioPipeline.shared.speak(text)
@@ -295,8 +291,7 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
                 
                 DispatchQueue.main.async {
                     // Trigger haptic and shutter notification
-                    let generator = UIImpactFeedbackGenerator(style: .heavy)
-                    generator.impactOccurred()
+                    HapticManager.shared.vibrateSuccess()
                     AudioServicesPlaySystemSound(1108) // Shutter Sound
                     
                     NotificationCenter.default.post(

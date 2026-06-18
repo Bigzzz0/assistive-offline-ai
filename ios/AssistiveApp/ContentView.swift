@@ -790,11 +790,14 @@ struct ContentView: View {
                     cameraAuthorized = granted
                     if granted {
                         startCameraIfNeeded()
+                    } else {
+                        speakText("กล้องถูกปฏิเสธการเข้าถึง กรุณาอนุญาตการเข้าถึงกล้องในการตั้งค่าระบบ")
                     }
                 }
             }
         default:
             cameraAuthorized = false
+            speakText("กล้องถูกปฏิเสธการเข้าถึง กรุณาอนุญาตการเข้าถึงกล้องในการตั้งค่าระบบ")
         }
     }
     
@@ -967,14 +970,11 @@ struct ContentView: View {
     
     private func vibrateHaptic(level: Int) {
         if level == 3 {
-            let generator = UINotificationFeedbackGenerator()
-            generator.notificationOccurred(.error)
+            HapticManager.shared.vibrateDanger()
         } else if level == 2 {
-            let generator = UINotificationFeedbackGenerator()
-            generator.notificationOccurred(.warning)
+            HapticManager.shared.vibrateWarning()
         } else {
-            let generator = UIImpactFeedbackGenerator(style: .medium)
-            generator.impactOccurred()
+            HapticManager.shared.vibrateGeneralInfo()
         }
     }
 }

@@ -4,6 +4,7 @@ class HapticManager {
     static let shared = HapticManager()
     
     private let impactGenerator = UIImpactFeedbackGenerator(style: .medium)
+    private let heavyImpactGenerator = UIImpactFeedbackGenerator(style: .heavy)
     private let notificationGenerator = UINotificationFeedbackGenerator()
     
     func vibrateGeneralInfo() {
@@ -12,6 +13,14 @@ class HapticManager {
             self.impactGenerator.impactOccurred()
         }
     }
+    
+    func vibrateSuccess() {
+        DispatchQueue.main.async {
+            self.heavyImpactGenerator.prepare()
+            self.heavyImpactGenerator.impactOccurred()
+        }
+    }
+
     
     func vibrateWarning() {
         DispatchQueue.main.async {
