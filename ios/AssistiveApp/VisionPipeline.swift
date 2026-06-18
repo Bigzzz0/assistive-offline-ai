@@ -28,6 +28,10 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private var lastSpokenTime: Double = 0.0
     private var lastBeepTime: Double = 0.0
     
+    // Document Auto-Capture States
+    private var stableStartTime: Double?
+    private var lastGuidanceSpokenTime: Double = 0.0
+    
     func startSession() {
         let captureSession = AVCaptureSession()
         captureSession.sessionPreset = .vga640x480
@@ -94,6 +98,15 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
             if now - lastAnalysisTime >= 0.25 { // 4 FPS for battery efficiency
                 lastAnalysisTime = now
                 runPointAndSpeak(pixelBuffer: pixelBuffer, now: now)
+            }
+            return
+        }
+        
+        // ── Document Auto-Capture Mode (OCR) ──
+        if activeMode == .read {
+            if now - lastAnalysisTime >= 0.20 { // 5 FPS
+                lastAnalysisTime = now
+                runDocumentAutoCapture(pixelBuffer: pixelBuffer, now: now)
             }
             return
         }
@@ -238,5 +251,70 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
         let uiImage = UIImage(cgImage: cgImage)
         return uiImage.jpegData(compressionQuality: 0.5) // Quality 50 optimization
+    }
+    
+    private func runDocumentAutoCapture(pixelBuffer: CVPixelBuffer, now: Double) {
+        let request = VNDetectRectanglesRequest()
+        request.minimumConfidence = 0.5
+        request.minimumAspectRatio = 0.5
+        request.maximumObservations = 1
+        
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            print("Vision rectangle detection error: \(error.localizedDescription)")
+            return
+        }
+        
+        guard let observation = request.results?.first else {
+            stableStartTime = nil
+            return
+        }
+        
+        let box = observation.boundingBox
+        let area = box.width * box.height
+        let boxCenter = box.origin.x + box.width / 2.0
+        
+        // Target criteria: centered horizontal (0.4 - 0.6) and size >= 40% of viewport
+        let isCentered = boxCenter >= 0.4 && boxCenter <= 0.6
+        let isLargeEnough = area >= 0.40
+        
+        if isCentered && isLargeEnough {
+            if stableStartTime == nil {
+                stableStartTime = now
+            } else if now - stableStartTime! >= 1.0 {
+                // Stable for 1.0 second! Auto-capture!
+                stableStartTime = nil // Reset stable state
+                
+                DispatchQueue.main.async {
+                    // Trigger haptic and shutter notification
+                    let generator = UIImpactFeedbackGenerator(style: .heavy)
+                    generator.impactOccurred()
+                    AudioServicesPlaySystemSound(1108) // Shutter Sound
+                    
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("TriggerOCRNotification"),
+                        object: nil
+                    )
+                }
+            }
+        } else {
+            stableStartTime = nil // Reset stable state
+            
+            // Speak guidance if cooldown elapsed
+            if now - lastGuidanceSpokenTime >= 2.0 {
+                lastGuidanceSpokenTime = now
+                if !isCentered {
+                    if boxCenter < 0.4 {
+                        AudioPipeline.shared.speak("ขยับกล้องไปทางซ้าย")
+                    } else {
+                        AudioPipeline.shared.speak("ขยับกล้องไปทางขวา")
+                    }
+                } else if !isLargeEnough {
+                    AudioPipeline.shared.speak("ขยับกล้องเข้ามาใกล้ขึ้น")
+                }
+            }
+        }
     }
 }

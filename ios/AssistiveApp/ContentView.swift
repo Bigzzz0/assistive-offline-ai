@@ -55,6 +55,9 @@ struct ContentView: View {
     @State private var isMockMode: Bool = true
     @State private var lastLatencyMs: Int = 0
     @State private var isProcessing: Bool = false
+    @State private var showQADialog: Bool = false
+    @State private var qaText: String = ""
+    @State private var hasCapturedImage: Bool = false
     
     // Camera permission state
     @State private var cameraAuthorized: Bool = false
@@ -231,6 +234,26 @@ struct ContentView: View {
                 
 // ---- Stacked Action Buttons ----
                 VStack(spacing: 12) {
+                    if hasCapturedImage || InferenceEngine.shared.lastCapturedImage != nil {
+                        Button(action: {
+                            qaText = ""
+                            showQADialog = true
+                            vibrateHaptic(level: 1)
+                        }) {
+                            HStack {
+                                Image(systemName: "bubble.left.and.bubble.right.fill")
+                                Text("💬 ถามเกี่ยวกับภาพล่าสุด (Q&A)")
+                                    .font(.system(size: 18, weight: .bold))
+                            }
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 60)
+                            .background(Color.purple)
+                            .cornerRadius(12)
+                        }
+                        .accessibilityLabel("ปุ่มถามตอบเกี่ยวกับภาพล่าสุด แตะสองครั้งเพื่อป้อนคำถาม")
+                    }
+                    
                     Button(action: { triggerCommand("อ่าน") }) {
                         Text("📖 อ่านข้อความ (OCR)")
                             .font(.system(size: 18, weight: .bold))
@@ -647,6 +670,16 @@ struct ContentView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TriggerOCRNotification"))) { _ in
+            triggerCommand("อ่าน")
+        }
+        .alert("ถามเกี่ยวกับภาพล่าสุด", isPresented: $showQADialog) {
+            TextField("ตัวอย่าง: แก้วน้ำอยู่ข้างกุญแจไหม", text: $qaText)
+            Button("ตกลง", action: submitQAPrompt)
+            Button("ยกเลิก", role: .cancel, action: {})
+        } message: {
+            Text("พิมพ์คำถามที่คุณอยากรู้เกี่ยวกับรูปภาพล่าสุด")
+        }
     }
     
     // MARK: - Camera Permission
@@ -745,6 +778,7 @@ struct ContentView: View {
                 self.speakText(result)
                 self.vibrateHaptic(level: 2)
                 self.isProcessing = false
+                self.hasCapturedImage = true
             }
         }
     }
@@ -800,6 +834,25 @@ struct ContentView: View {
             .replacingOccurrences(of: "\\(ความมั่นใจ:\\s*[^\\)]+\\)", with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         AudioPipeline.shared.speak(cleanText)
+    }
+    
+    private func submitQAPrompt() {
+        let question = qaText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { return }
+        
+        isProcessing = true
+        vibrateHaptic(level: 1)
+        speakText("กำลังวิเคราะห์คำถาม")
+        statusText = "กำลังวิเคราะห์คำถาม..."
+        
+        InferenceEngine.shared.queryLastImage(prompt: question, onToken: { _ in }) { result in
+            self.aiResultText = result
+            self.statusText = "ตอบคำถามเสร็จสิ้น"
+            self.speakText(result)
+            self.vibrateHaptic(level: 2)
+            self.isProcessing = false
+            self.qaText = ""
+        }
     }
     
     private func availableSpaceMB() -> Int64 {

@@ -77,6 +77,7 @@ class InferenceEngine {
     
     private var engine: Engine?
     private var conversation: Conversation?
+    private(set) var lastCapturedImage: Data?
     
     // System Prompt to enforce constraint decoding format (Thai BLV Assistant)
     private let systemPrompt = """
@@ -321,6 +322,7 @@ class InferenceEngine {
     }
     
     func analyzeImage(jpegData: Data, promptText: String, onToken: @escaping (String) -> Void, completion: @escaping (String) -> Void) {
+        self.lastCapturedImage = jpegData
         // ── OCR mode uses real Vision framework ──
         if promptText.contains("อ่าน") {
             performOCR(jpegData: jpegData) { result in
@@ -417,5 +419,99 @@ class InferenceEngine {
         
         // Fallback to mock VLM
         runMockVLM(promptText: promptText, onToken: onToken, completion: completion)
+    }
+    
+    func queryLastImage(prompt: String, onToken: @escaping (String) -> Void, completion: @escaping (String) -> Void) {
+        guard let jpegData = lastCapturedImage else {
+            completion("ไม่มีภาพที่บันทึกไว้ กรุณาถ่ายภาพก่อน")
+            return
+        }
+        
+        if !isMockMode, let engine = self.engine {
+            LogStore.shared.log("[InferenceEngine] Starting follow-up Q&A on last captured image. Prompt: \(prompt)")
+            
+            // Temporarily pause AR sessions
+            let wasARActive = ARDepthPipeline.shared.isActive
+            let wasRoomPlanActive: Bool
+            #if canImport(RoomPlan)
+            wasRoomPlanActive = RoomPlanManager.shared.session != nil
+            RoomPlanManager.shared.pauseSession()
+            #else
+            wasRoomPlanActive = false
+            #endif
+            ARDepthPipeline.shared.pauseSession()
+            
+            Task.detached(priority: .userInitiated) {
+                do {
+                    LogStore.shared.log("[InferenceEngine] Q&A - Re-creating conversation...")
+                    let localConversation = try await engine.createConversation()
+                    
+                    let systemInstruction = "คุณคือผู้ช่วยคนตาบอดภาษาไทย ตอบข้อมูลเกี่ยวกับภาพนี้สั้นและตรงประเด็นตามคำถาม ห้ามอธิบายยาว ห้ามใช้คำฟุ่มเฟือย"
+                    let promptWithInstruction = "\(systemInstruction)\n\nคำถาม: \(prompt)"
+                    let message = Message(contents: [
+                        Content.imageData(jpegData),
+                        Content.text(promptWithInstruction)
+                    ])
+                    
+                    var accumulatedText = ""
+                    for try await chunk in localConversation.sendMessageStream(message) {
+                        let textChunk = chunk.toString
+                        accumulatedText += textChunk
+                        DispatchQueue.main.async {
+                            onToken(textChunk)
+                        }
+                    }
+                    
+                    DispatchQueue.main.async {
+                        completion(accumulatedText)
+                        if wasARActive { ARDepthPipeline.shared.resumeSession() }
+                        #if canImport(RoomPlan)
+                        if wasRoomPlanActive { RoomPlanManager.shared.resumeSession() }
+                        #endif
+                    }
+                } catch {
+                    LogStore.shared.log("[InferenceEngine] Q&A inference error: \(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        if wasARActive { ARDepthPipeline.shared.resumeSession() }
+                        #if canImport(RoomPlan)
+                        if wasRoomPlanActive { RoomPlanManager.shared.resumeSession() }
+                        #endif
+                    }
+                    self.runMockQA(prompt: prompt, onToken: onToken, completion: completion)
+                }
+            }
+            return
+        }
+        
+        runMockQA(prompt: prompt, onToken: onToken, completion: completion)
+    }
+    
+    private func runMockQA(prompt: String, onToken: @escaping (String) -> Void, completion: @escaping (String) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let mockResponse: String
+            if prompt.contains("แก้ว") || prompt.contains("น้ำ") {
+                mockResponse = "แก้วน้ำวางอยู่บนโต๊ะใกล้กับกองกุญแจครับ"
+            } else if prompt.contains("กุญแจ") {
+                mockResponse = "กุญแจวางอยู่ถัดจากแก้วน้ำทางด้านขวาครับ"
+            } else if prompt.contains("เก้าอี้") {
+                mockResponse = "มีเก้าอี้ไม้หนึ่งตัววางกีดขวางทางเดินด้านหน้าตรงกลางเลยครับ"
+            } else {
+                mockResponse = "จากการวิเคราะห์ภาพ ไม่พบคำตอบที่แน่ชัดสำหรับคำถามนี้ครับ"
+            }
+            
+            let tokens = mockResponse.components(separatedBy: " ")
+            var accumulated = ""
+            for token in tokens {
+                let tokenWithSpace = token + " "
+                accumulated += tokenWithSpace
+                DispatchQueue.main.async {
+                    onToken(tokenWithSpace)
+                }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            DispatchQueue.main.async {
+                completion(accumulated)
+            }
+        }
     }
 }
