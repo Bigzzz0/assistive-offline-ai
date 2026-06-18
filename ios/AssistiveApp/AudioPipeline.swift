@@ -7,6 +7,11 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
     private var audioEngine = AVAudioEngine()
     private var onSpeechDone: (() -> Void)?
     
+    private(set) var speechRate: Float = {
+        let saved = UserDefaults.standard.float(forKey: "TTS_SpeechRate")
+        return saved > 0.0 ? saved : 0.5
+    }()
+    
     // Tone Oscillator properties
     private var toneSourceNode: AVAudioSourceNode?
     private var isPlayingTone = false
@@ -161,9 +166,25 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
         
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "th-TH")
-        utterance.rate = 0.5
+        utterance.rate = speechRate
         
         speechSynthesizer.speak(utterance)
+    }
+    
+    func increaseSpeechRate() -> Float {
+        var rate = speechRate + 0.05
+        if rate > 0.85 { rate = 0.85 }
+        speechRate = rate
+        UserDefaults.standard.set(rate, forKey: "TTS_SpeechRate")
+        return rate
+    }
+    
+    func decreaseSpeechRate() -> Float {
+        var rate = speechRate - 0.05
+        if rate < 0.25 { rate = 0.25 }
+        speechRate = rate
+        UserDefaults.standard.set(rate, forKey: "TTS_SpeechRate")
+        return rate
     }
     
     func stopSpeaking() {

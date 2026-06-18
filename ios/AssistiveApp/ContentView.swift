@@ -578,14 +578,41 @@ struct ContentView: View {
         .gesture(
             DragGesture().onEnded { value in
                 guard Date().timeIntervalSince(lastModeChangeTime) >= modeSwitchCooldown else { return }
-                if value.translation.width > 100 { // Swipe Right -> previous
-                    currentMode = currentMode.previous()
-                    announceMode()
-                    lastModeChangeTime = Date()
-                } else if value.translation.width < -100 { // Swipe Left -> next
-                    currentMode = currentMode.next()
-                    announceMode()
-                    lastModeChangeTime = Date()
+                let dx = value.translation.width
+                let dy = value.translation.height
+                
+                if abs(dx) > abs(dy) {
+                    if dx > 100 { // Swipe Right -> previous
+                        currentMode = currentMode.previous()
+                        announceMode()
+                        lastModeChangeTime = Date()
+                    } else if dx < -100 { // Swipe Left -> next
+                        currentMode = currentMode.next()
+                        announceMode()
+                        lastModeChangeTime = Date()
+                    }
+                } else {
+                    if dy > 100 { // Swipe Down -> decrease speech rate
+                        let newRate = AudioPipeline.shared.decreaseSpeechRate()
+                        let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
+                        let levelIndex = Int(round((newRate - 0.25) / 0.05))
+                        if levelIndex >= 0 && levelIndex < levelWords.count {
+                            speakText("ความเร็วระดับ\(levelWords[levelIndex])")
+                        } else {
+                            speakText(String(format: "ความเร็ว %.2f", newRate))
+                        }
+                        lastModeChangeTime = Date()
+                    } else if dy < -100 { // Swipe Up -> increase speech rate
+                        let newRate = AudioPipeline.shared.increaseSpeechRate()
+                        let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
+                        let levelIndex = Int(round((newRate - 0.25) / 0.05))
+                        if levelIndex >= 0 && levelIndex < levelWords.count {
+                            speakText("ความเร็วระดับ\(levelWords[levelIndex])")
+                        } else {
+                            speakText(String(format: "ความเร็ว %.2f", newRate))
+                        }
+                        lastModeChangeTime = Date()
+                    }
                 }
             }
         )
