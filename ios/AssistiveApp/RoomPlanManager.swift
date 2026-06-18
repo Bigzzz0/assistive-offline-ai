@@ -24,14 +24,13 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         
         // Enable ARDepthPipeline frame processing and set adaptive throttle
         ARDepthPipeline.shared.throttleInterval = 0.50
-        ARDepthPipeline.shared.isActive = true
         
         LogStore.shared.log("[RoomPlan] Starting RoomCaptureSession...")
         let session = RoomCaptureSession()
         session.delegate = self
         
         // Share the RoomCaptureSession's ARSession with ARDepthPipeline to prevent GPU/camera conflicts
-        session.arSession.delegate = ARDepthPipeline.shared
+        ARDepthPipeline.shared.activate(with: session.arSession)
         
         self.session = session
         
@@ -47,7 +46,7 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         session = nil
         
         // Disable ARDepthPipeline and restore throttleInterval
-        ARDepthPipeline.shared.isActive = false
+        ARDepthPipeline.shared.deactivate()
         ARDepthPipeline.shared.throttleInterval = 0.20
     }
     
@@ -92,7 +91,7 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     
     func pauseSession() {
         session?.stop()
-        ARDepthPipeline.shared.isActive = false
+        ARDepthPipeline.shared.deactivate()
         LogStore.shared.log("[RoomPlan] Session paused (GPU yield).")
     }
     
@@ -102,8 +101,7 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         session.run(configuration: config)
         
         // Restore delegate and active state
-        session.arSession.delegate = ARDepthPipeline.shared
-        ARDepthPipeline.shared.isActive = true
+        ARDepthPipeline.shared.activate(with: session.arSession)
         LogStore.shared.log("[RoomPlan] Session resumed.")
     }
     

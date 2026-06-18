@@ -58,6 +58,18 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         LogStore.shared.log("[ARDepthPipeline] Session resumed.")
     }
     
+    func activate(with arSession: ARSession) {
+        self.isActive = true
+        arSession.delegate = self
+        LogStore.shared.log("[ARDepthPipeline] Activated with shared ARSession delegate.")
+    }
+    
+    func deactivate() {
+        self.isActive = false
+        lastDetectedPeopleWorldPositions.removeAll()
+        LogStore.shared.log("[ARDepthPipeline] Deactivated.")
+    }
+    
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard isActive else { return }
         let now = CACurrentMediaTime()
