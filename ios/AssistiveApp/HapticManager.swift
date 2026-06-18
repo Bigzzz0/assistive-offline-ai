@@ -3,27 +3,27 @@ import UIKit
 class HapticManager {
     static let shared = HapticManager()
     
+    private let impactGenerator = UIImpactFeedbackGenerator(style: .medium)
+    private let notificationGenerator = UINotificationFeedbackGenerator()
+    
     func vibrateGeneralInfo() {
         DispatchQueue.main.async {
-            let generator = UIImpactFeedbackGenerator(style: .medium)
-            generator.prepare()
-            generator.impactOccurred()
+            self.impactGenerator.prepare()
+            self.impactGenerator.impactOccurred()
         }
     }
     
     func vibrateWarning() {
         DispatchQueue.main.async {
-            let generator = UINotificationFeedbackGenerator()
-            generator.prepare()
-            generator.notificationOccurred(.warning)
+            self.notificationGenerator.prepare()
+            self.notificationGenerator.notificationOccurred(.warning)
         }
     }
     
     func vibrateDanger() {
         DispatchQueue.main.async {
-            let generator = UINotificationFeedbackGenerator()
-            generator.prepare()
-            generator.notificationOccurred(.error)
+            self.notificationGenerator.prepare()
+            self.notificationGenerator.notificationOccurred(.error)
         }
     }
 }

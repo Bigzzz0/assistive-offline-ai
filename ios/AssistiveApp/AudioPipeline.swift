@@ -1,4 +1,5 @@
 import AVFoundation
+import UIKit
 
 class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
     static let shared = AudioPipeline()
@@ -30,6 +31,9 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
         let audioSession = AVAudioSession.sharedInstance()
         do {
             try audioSession.setCategory(.playAndRecord, mode: .default, options: [.mixWithOthers, .allowBluetooth, .defaultToSpeaker])
+            if #available(iOS 13.0, *) {
+                try audioSession.setAllowHapticsAndSystemSoundsDuringRecording(true)
+            }
             try audioSession.setActive(true)
         } catch {
             print("Failed to set up AVAudioSession: \(error.localizedDescription)")
@@ -162,13 +166,27 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
     
     func speak(_ text: String, completion: @escaping () -> Void = {}) {
         stopSpeaking()
-        self.onSpeechDone = completion
         
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "th-TH")
-        utterance.rate = speechRate
+        // Strip out technical confidence labels to keep speech clean
+        let cleanText = text
+            .replacingOccurrences(of: "\\(ความมั่นใจ:\\s*[^\\)]+\\)", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         
-        speechSynthesizer.speak(utterance)
+        if UIAccessibility.isVoiceOverRunning {
+            self.onSpeechDone = nil
+            UIAccessibility.post(notification: .announcement, argument: cleanText)
+            DispatchQueue.main.async {
+                completion()
+            }
+        } else {
+            self.onSpeechDone = completion
+            
+            let utterance = AVSpeechUtterance(string: cleanText)
+            utterance.voice = AVSpeechSynthesisVoice(language: "th-TH")
+            utterance.rate = speechRate
+            
+            speechSynthesizer.speak(utterance)
+        }
     }
     
     func increaseSpeechRate() -> Float {
