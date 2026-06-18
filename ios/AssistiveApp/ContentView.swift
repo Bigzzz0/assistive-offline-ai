@@ -96,311 +96,328 @@ struct ContentView: View {
     @State private var totalInferences: Int = 0
     @State private var averageLatencyMs: Int = 0
     
+    private var headerView: some View {
+        HStack {
+            Text("ASSISTIVE OFFLINE AI")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundColor(.white)
+            Spacer()
+            Text(isMockMode ? "⚠️ Mock" : "✅ Real Mode")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(isMockMode ? Color.gray : Color.green)
+                .cornerRadius(16)
+        }
+        .padding(.top, 10)
+    }
+    
+    private var activeModeBannerAndSpeedRow: some View {
+        VStack(spacing: 12) {
+            // ---- Active Mode Banner ----
+            VStack(spacing: 4) {
+                Text("โหมดใช้งานสัมผัสปัจจุบัน")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.gray)
+                Text(currentMode.rawValue)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundColor(.white)
+                Text("ปัดซ้าย/ขวาเพื่อเปลี่ยน | แตะสองครั้งที่กล้องเพื่อทำงาน")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color.blue)
+                    .multilineTextAlignment(.center)
+            }
+            .padding()
+            .frame(maxWidth: .infinity)
+            .background(Color(red: 0.12, green: 0.16, blue: 0.23))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.blue, lineWidth: 2)
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("โหมดใช้งานสัมผัสปัจจุบันคือ \(currentMode.speech)")
+            .accessibilityValue("ปัดขึ้นหรือปัดลงเพื่อสลับโหมด")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment:
+                    currentMode = currentMode.next()
+                    announceMode()
+                case .decrement:
+                    currentMode = currentMode.previous()
+                    announceMode()
+                @unknown default:
+                    break
+                }
+            }
+            
+            // ---- TTS Speech Speed Control ----
+            HStack {
+                Image(systemName: "speedometer")
+                    .foregroundColor(.cyan)
+                Text("ความเร็วเสียงพูด:")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.gray)
+                Spacer()
+                Text(speechRateText)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.cyan)
+            }
+            .padding()
+            .frame(maxWidth: .infinity)
+            .background(Color(red: 0.08, green: 0.08, blue: 0.08))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("ปรับความเร็วเสียงพูด")
+            .accessibilityValue(speechRateText)
+            .accessibilityHint("ปัดขึ้นเพื่อเพิ่มความเร็ว ปัดลงเพื่อลดความเร็ว")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment:
+                    let newRate = AudioPipeline.shared.increaseSpeechRate()
+                    self.speechRateState = newRate
+                    let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
+                    let levelIndex = Int(round((newRate - 0.25) / 0.05))
+                    if levelIndex >= 0 && levelIndex < levelWords.count {
+                        speakText("ความเร็วระดับ\(levelWords[levelIndex])")
+                    } else {
+                        speakText(String(format: "ความเร็ว %.2f", newRate))
+                    }
+                case .decrement:
+                    let newRate = AudioPipeline.shared.decreaseSpeechRate()
+                    self.speechRateState = newRate
+                    let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
+                    let levelIndex = Int(round((newRate - 0.25) / 0.05))
+                    if levelIndex >= 0 && levelIndex < levelWords.count {
+                        speakText("ความเร็วระดับ\(levelWords[levelIndex])")
+                    } else {
+                        speakText(String(format: "ความเร็ว %.2f", newRate))
+                    }
+                @unknown default:
+                    break
+                }
+            }
+        }
+    }
+    
+    private var cameraViewport: some View {
+        ZStack {
+            if cameraAuthorized {
+                if currentMode == .peopleDetection, let arSession = ARDepthPipeline.shared.session {
+                    ARPreviewView(session: arSession)
+                } else if currentMode == .roomPlan, let roomSession = RoomPlanManager.shared.session {
+                    #if canImport(RoomPlan)
+                    ARPreviewView(session: roomSession.arSession)
+                    #else
+                    Color.black
+                    #endif
+                } else if let session = VisionPipeline.shared.session {
+                    CameraPreviewView(session: session)
+                } else {
+                    Color.black
+                }
+            } else {
+                Color.black
+                VStack {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 40))
+                        .foregroundColor(.gray)
+                    Text(cameraAuthorized ? "กำลังเตรียมกล้อง..." : "กรุณาอนุญาตการใช้กล้อง")
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray)
+                        .padding(.top, 4)
+                }
+            }
+            
+            VStack {
+                Spacer()
+                Text(isProcessing ? "กำลังประมวลผล..." : "แตะสองครั้งเพื่อวิเคราะห์ภาพ")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.7))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.5))
+                    .cornerRadius(8)
+                    .padding(.bottom, 8)
+            }
+        }
+        .frame(height: 250)
+        .cornerRadius(16)
+        .gesture(
+            TapGesture(count: 2).onEnded {
+                triggerCommand(currentMode.command)
+            }
+            .simultaneously(with: TapGesture(count: 1).onEnded {
+                announceMode()
+            })
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("หน้าต่างกล้อง โหมดปัจจุบันคือ \(currentMode.speech). แตะสองครั้งเพื่อเริ่มทำงาน หรือปัดซ้ายขวาเพื่อสลับโหมด")
+    }
+    
+    private var statusAndOutputViews: some View {
+        VStack(spacing: 16) {
+            // ---- Status Card ----
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("สถานะระบบ")
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray)
+                    Text(statusLabel)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(isMockMode ? .gray : (!InferenceEngine.shared.isReady() ? .yellow : .green))
+                }
+                Spacer()
+                if lastLatencyMs > 0 {
+                    Text("\(lastLatencyMs)ms")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(isMockMode ? .gray : (!InferenceEngine.shared.isReady() ? .yellow : .green))
+                }
+            }
+            .padding()
+            .frame(maxWidth: .infinity)
+            .background(Color(red: 0.07, green: 0.07, blue: 0.07))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isMockMode ? Color.gray : (!InferenceEngine.shared.isReady() ? Color.yellow : Color.green), lineWidth: 2)
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("สถานะระบบ \(statusText) การวิเคราะห์ภาพล่าสุดใช้เวลา \(lastLatencyMs) มิลลิวินาที")
+            
+            // ---- AI Output Box ----
+            VStack {
+                Text(aiResultText.isEmpty ? "ระบบจะอธิบายภาพผ่านเสียงพูดและการสั่น\nปัดซ้ายขวาเพื่อปรับโหมด หรือแตะกล้องเพื่อเริ่ม" : aiResultText)
+                    .font(.system(size: aiResultText.isEmpty ? 16 : 20, weight: .medium))
+                    .foregroundColor(aiResultText.isEmpty ? .gray : .white)
+                    .multilineTextAlignment(.center)
+                    .padding()
+            }
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 120)
+            .background(Color.black)
+            .cornerRadius(16)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color.white, lineWidth: 2)
+            )
+            .onTapGesture {
+                speakText(aiResultText.isEmpty ? "ระบบจะอธิบายภาพผ่านเสียงพูดและการสั่น" : aiResultText)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("คำอธิบายภาพจากเอไอ: \(aiResultText.isEmpty ? "ยังไม่มีคำอธิบาย แตะที่หน้าจอเพื่อวิเคราะห์" : aiResultText)")
+        }
+    }
+    
+    private var actionButtons: some View {
+        VStack(spacing: 12) {
+            if hasCapturedImage || InferenceEngine.shared.lastCapturedImage != nil {
+                Button(action: {
+                    qaText = ""
+                    showQADialog = true
+                    vibrateHaptic(level: 1)
+                }) {
+                    HStack {
+                        Image(systemName: "bubble.left.and.bubble.right.fill")
+                        Text("💬 ถามเกี่ยวกับภาพล่าสุด (Q&A)")
+                            .font(.system(size: 18, weight: .bold))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 60)
+                    .background(Color.purple)
+                    .cornerRadius(12)
+                }
+                .accessibilityLabel("ปุ่มถามตอบเกี่ยวกับภาพล่าสุด แตะสองครั้งเพื่อป้อนคำถาม")
+            }
+            
+            Button(action: { triggerCommand("อ่าน") }) {
+                Text("📖 อ่านข้อความ (OCR)")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 60)
+                    .background(Color.blue)
+                    .cornerRadius(12)
+            }
+            .accessibilityLabel("ปุ่มอ่านข้อความบนหนังสือ")
+            
+            Button(action: { triggerCommand("ดู") }) {
+                Text("👁️ ดูสิ่งของบนโต๊ะ")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 60)
+                    .background(Color.green)
+                    .cornerRadius(12)
+            }
+            .accessibilityLabel("ปุ่มตรวจหาสิ่งของรอบตัว")
+            
+            Button(action: { triggerCommand("ข้างหน้า") }) {
+                Text("🚧 ตรวจสิ่งกีดขวางข้างหน้า")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 60)
+                    .background(Color.orange)
+                    .cornerRadius(12)
+            }
+            .accessibilityLabel("ปุ่มตรวจสอบสิ่งกีดขวางทางเดินด้านหน้า")
+            
+            Button(action: {
+                currentMode = .pointAndSpeak
+            }) {
+                Text("👉 ชี้นิ้วแล้วอ่าน (Point & Speak)")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 60)
+                    .background(Color.purple)
+                    .cornerRadius(12)
+            }
+            .accessibilityLabel("ปุ่มชี้นิ้วแล้วอ่านข้อความที่ปลายนิ้วสัมผัส")
+            
+            Button(action: {
+                currentMode = .peopleDetection
+            }) {
+                Text("👤 เตือนระยะคน (People Alert)")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 60)
+                    .background(Color.pink)
+                    .cornerRadius(12)
+            }
+            .accessibilityLabel("ปุ่มเตือนระยะห่างคนรอบตัวด้วยเสียงและการสั่น")
+            
+            Button(action: {
+                currentMode = .roomPlan
+            }) {
+                Text("🪑 ค้นหาเก้าอี้และประตู (LiDAR)")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 60)
+                    .background(Color.teal)
+                    .cornerRadius(12)
+            }
+            .accessibilityLabel("ปุ่มค้นหาเก้าอี้และประตูรอบตัวโดยใช้ไรดาร์สแกน")
+        }
+    }
+    
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                // ---- Header ----
-                HStack {
-                    Text("ASSISTIVE OFFLINE AI")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundColor(.white)
-                    Spacer()
-                    Text(isMockMode ? "⚠️ Mock" : "✅ Real Mode")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(isMockMode ? Color.gray : Color.green)
-                        .cornerRadius(16)
-                }
-                .padding(.top, 10)
-                
-                // ---- Active Mode Banner ----
-                VStack(spacing: 4) {
-                    Text("โหมดใช้งานสัมผัสปัจจุบัน")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.gray)
-                    Text(currentMode.rawValue)
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(.white)
-                    Text("ปัดซ้าย/ขวาเพื่อเปลี่ยน | แตะสองครั้งที่กล้องเพื่อทำงาน")
-                        .font(.system(size: 11))
-                        .foregroundColor(Color.blue)
-                        .multilineTextAlignment(.center)
-                }
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(Color(red: 0.12, green: 0.16, blue: 0.23))
-                .cornerRadius(12)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.blue, lineWidth: 2)
-                )
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("โหมดใช้งานสัมผัสปัจจุบันคือ \(currentMode.speech)")
-                .accessibilityValue("ปัดขึ้นหรือปัดลงเพื่อสลับโหมด")
-                .accessibilityAdjustableAction { direction in
-                    switch direction {
-                    case .increment:
-                        currentMode = currentMode.next()
-                        announceMode()
-                    case .decrement:
-                        currentMode = currentMode.previous()
-                        announceMode()
-                    @unknown default:
-                        break
-                    }
-                }
-                
-                // ---- TTS Speech Speed Control ----
-                HStack {
-                    Image(systemName: "speedometer")
-                        .foregroundColor(.cyan)
-                    Text("ความเร็วเสียงพูด:")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.gray)
-                    Spacer()
-                    Text(speechRateText)
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(.cyan)
-                }
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(Color(red: 0.08, green: 0.08, blue: 0.08))
-                .cornerRadius(12)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
-                )
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("ปรับความเร็วเสียงพูด")
-                .accessibilityValue(speechRateText)
-                .accessibilityHint("ปัดขึ้นเพื่อเพิ่มความเร็ว ปัดลงเพื่อลดความเร็ว")
-                .accessibilityAdjustableAction { direction in
-                    switch direction {
-                    case .increment:
-                        let newRate = AudioPipeline.shared.increaseSpeechRate()
-                        self.speechRateState = newRate
-                        let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
-                        let levelIndex = Int(round((newRate - 0.25) / 0.05))
-                        if levelIndex >= 0 && levelIndex < levelWords.count {
-                            speakText("ความเร็วระดับ\(levelWords[levelIndex])")
-                        } else {
-                            speakText(String(format: "ความเร็ว %.2f", newRate))
-                        }
-                    case .decrement:
-                        let newRate = AudioPipeline.shared.decreaseSpeechRate()
-                        self.speechRateState = newRate
-                        let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
-                        let levelIndex = Int(round((newRate - 0.25) / 0.05))
-                        if levelIndex >= 0 && levelIndex < levelWords.count {
-                            speakText("ความเร็วระดับ\(levelWords[levelIndex])")
-                        } else {
-                            speakText(String(format: "ความเร็ว %.2f", newRate))
-                        }
-                    @unknown default:
-                        break
-                    }
-                }
-                
-                // ---- Live Camera Viewport ----
-                ZStack {
-                    if cameraAuthorized {
-                        if currentMode == .peopleDetection, let arSession = ARDepthPipeline.shared.session {
-                            ARPreviewView(session: arSession)
-                        } else if currentMode == .roomPlan, let roomSession = RoomPlanManager.shared.session {
-                            #if canImport(RoomPlan)
-                            ARPreviewView(session: roomSession.arSession)
-                            #else
-                            Color.black
-                            #endif
-                        } else if let session = VisionPipeline.shared.session {
-                            CameraPreviewView(session: session)
-                        } else {
-                            Color.black
-                        }
-                    } else {
-                        Color.black
-                        VStack {
-                            Image(systemName: "camera.fill")
-                                .font(.system(size: 40))
-                                .foregroundColor(.gray)
-                            Text(cameraAuthorized ? "กำลังเตรียมกล้อง..." : "กรุณาอนุญาตการใช้กล้อง")
-                                .font(.system(size: 12))
-                                .foregroundColor(.gray)
-                                .padding(.top, 4)
-                        }
-                    }
-                    
-                    VStack {
-                        Spacer()
-                        Text(isProcessing ? "กำลังประมวลผล..." : "แตะสองครั้งเพื่อวิเคราะห์ภาพ")
-                            .font(.system(size: 12))
-                            .foregroundColor(.white.opacity(0.7))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.black.opacity(0.5))
-                            .cornerRadius(8)
-                            .padding(.bottom, 8)
-                    }
-                }
-                .frame(height: 250)
-                .cornerRadius(16)
-                .gesture(
-                    TapGesture(count: 2).onEnded {
-                        triggerCommand(currentMode.command)
-                    }
-                    .simultaneously(with: TapGesture(count: 1).onEnded {
-                        announceMode()
-                    })
-                )
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("หน้าต่างกล้อง โหมดปัจจุบันคือ \(currentMode.speech). แตะสองครั้งเพื่อเริ่มทำงาน หรือปัดซ้ายขวาเพื่อสลับโหมด")
-                
-                // ---- Status Card ----
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("สถานะระบบ")
-                            .font(.system(size: 12))
-                            .foregroundColor(.gray)
-                        Text(statusLabel)
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundColor(isMockMode ? .gray : (!InferenceEngine.shared.isReady() ? .yellow : .green))
-                    }
-                    Spacer()
-                    if lastLatencyMs > 0 {
-                        Text("\(lastLatencyMs)ms")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(isMockMode ? .gray : (!InferenceEngine.shared.isReady() ? .yellow : .green))
-                    }
-                }
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(Color(red: 0.07, green: 0.07, blue: 0.07))
-                .cornerRadius(12)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(isMockMode ? Color.gray : (!InferenceEngine.shared.isReady() ? Color.yellow : Color.green), lineWidth: 2)
-                )
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("สถานะระบบ \(statusText) การวิเคราะห์ภาพล่าสุดใช้เวลา \(lastLatencyMs) มิลลิวินาที")
-                
-                // ---- AI Output Box ----
-                VStack {
-                    Text(aiResultText.isEmpty ? "ระบบจะอธิบายภาพผ่านเสียงพูดและการสั่น\nปัดซ้ายขวาเพื่อปรับโหมด หรือแตะกล้องเพื่อเริ่ม" : aiResultText)
-                        .font(.system(size: aiResultText.isEmpty ? 16 : 20, weight: .medium))
-                        .foregroundColor(aiResultText.isEmpty ? .gray : .white)
-                        .multilineTextAlignment(.center)
-                        .padding()
-                }
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 120)
-                .background(Color.black)
-                .cornerRadius(16)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(Color.white, lineWidth: 2)
-                )
-                .onTapGesture {
-                    speakText(aiResultText.isEmpty ? "ระบบจะอธิบายภาพผ่านเสียงพูดและการสั่น" : aiResultText)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("คำอธิบายภาพจากเอไอ: \(aiResultText.isEmpty ? "ยังไม่มีคำอธิบาย แตะที่หน้าจอเพื่อวิเคราะห์" : aiResultText)")
-                
-// ---- Stacked Action Buttons ----
-                VStack(spacing: 12) {
-                    if hasCapturedImage || InferenceEngine.shared.lastCapturedImage != nil {
-                        Button(action: {
-                            qaText = ""
-                            showQADialog = true
-                            vibrateHaptic(level: 1)
-                        }) {
-                            HStack {
-                                Image(systemName: "bubble.left.and.bubble.right.fill")
-                                Text("💬 ถามเกี่ยวกับภาพล่าสุด (Q&A)")
-                                    .font(.system(size: 18, weight: .bold))
-                            }
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 60)
-                            .background(Color.purple)
-                            .cornerRadius(12)
-                        }
-                        .accessibilityLabel("ปุ่มถามตอบเกี่ยวกับภาพล่าสุด แตะสองครั้งเพื่อป้อนคำถาม")
-                    }
-                    
-                    Button(action: { triggerCommand("อ่าน") }) {
-                        Text("📖 อ่านข้อความ (OCR)")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 60)
-                            .background(Color.blue)
-                            .cornerRadius(12)
-                    }
-                    .accessibilityLabel("ปุ่มอ่านข้อความบนหนังสือ")
-                    
-                    Button(action: { triggerCommand("ดู") }) {
-                        Text("👁️ ดูสิ่งของบนโต๊ะ")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 60)
-                            .background(Color.green)
-                            .cornerRadius(12)
-                    }
-                    .accessibilityLabel("ปุ่มตรวจหาสิ่งของรอบตัว")
-                    
-                    Button(action: { triggerCommand("ข้างหน้า") }) {
-                        Text("🚧 ตรวจสิ่งกีดขวางข้างหน้า")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 60)
-                            .background(Color.orange)
-                            .cornerRadius(12)
-                    }
-                    .accessibilityLabel("ปุ่มตรวจสอบสิ่งกีดขวางทางเดินด้านหน้า")
-                    
-                    Button(action: {
-                        currentMode = .pointAndSpeak
-                    }) {
-                        Text("👉 ชี้นิ้วแล้วอ่าน (Point & Speak)")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 60)
-                            .background(Color.purple)
-                            .cornerRadius(12)
-                    }
-                    .accessibilityLabel("ปุ่มชี้นิ้วแล้วอ่านข้อความที่ปลายนิ้วสัมผัส")
-                    
-                    Button(action: {
-                        currentMode = .peopleDetection
-                    }) {
-                        Text("👤 เตือนระยะคน (People Alert)")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 60)
-                            .background(Color.pink)
-                            .cornerRadius(12)
-                    }
-                    .accessibilityLabel("ปุ่มเตือนระยะห่างคนรอบตัวด้วยเสียงและการสั่น")
-                    
-                    Button(action: {
-                        currentMode = .roomPlan
-                    }) {
-                        Text("🪑 ค้นหาเก้าอี้และประตู (LiDAR)")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 60)
-                            .background(Color.teal)
-                            .cornerRadius(12)
-                    }
-                    .accessibilityLabel("ปุ่มค้นหาเก้าอี้และประตูรอบตัวโดยใช้ไรดาร์สแกน")
-                }
+                headerView
+                activeModeBannerAndSpeedRow
+                cameraViewport
+                statusAndOutputViews
+                actionButtons
                 // ---- Dev Panel + Model Manager toggles ----
                 HStack(spacing: 8) {
                     Button(action: {
