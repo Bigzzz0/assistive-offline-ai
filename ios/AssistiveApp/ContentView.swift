@@ -79,6 +79,16 @@ struct ContentView: View {
         return "ระบบพร้อมทำงาน (ใช้งานจริง)"
     }
     
+    private var speechRateText: String {
+        let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
+        let levelIndex = Int(round((speechRateState - 0.25) / 0.05))
+        if levelIndex >= 0 && levelIndex < levelWords.count {
+            return "ระดับ \(levelWords[levelIndex])"
+        } else {
+            return String(format: "%.2f", speechRateState)
+        }
+    }
+    
     // Performance Mock Metrics for UI presentation
     @State private var memoryUsageMB: Float = 0
     @State private var cpuTempCelsius: Float = 0
@@ -150,10 +160,7 @@ struct ContentView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.gray)
                     Spacer()
-                    let levelWords = ["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"]
-                    let levelIndex = Int(round((speechRateState - 0.25) / 0.05))
-                    let speedText = levelIndex >= 0 && levelIndex < levelWords.count ? "ระดับ \(levelWords[levelIndex])" : String(format: "%.2f", speechRateState)
-                    Text(speedText)
+                    Text(speechRateText)
                         .font(.system(size: 16, weight: .bold))
                         .foregroundColor(.cyan)
                 }
@@ -167,9 +174,7 @@ struct ContentView: View {
                 )
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("ปรับความเร็วเสียงพูด")
-                .accessibilityValue(
-                    Int(round((speechRateState - 0.25) / 0.05)) >= 0 && Int(round((speechRateState - 0.25) / 0.05)) < 13 ? "ระดับ \(["หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ", "สิบเอ็ด", "สิบสอง", "สิบสาม"][Int(round((speechRateState - 0.25) / 0.05))])" : String(format: "%.2f", speechRateState)
-                )
+                .accessibilityValue(speechRateText)
                 .accessibilityHint("ปัดขึ้นเพื่อเพิ่มความเร็ว ปัดลงเพื่อลดความเร็ว")
                 .accessibilityAdjustableAction { direction in
                     switch direction {
