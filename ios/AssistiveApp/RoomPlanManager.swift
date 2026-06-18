@@ -22,13 +22,17 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
             return
         }
         
-        // Start ARDepthPipeline with lower FPS (0.50s throttle interval) before RoomCaptureSession
+        // Enable ARDepthPipeline frame processing and set adaptive throttle
         ARDepthPipeline.shared.throttleInterval = 0.50
-        ARDepthPipeline.shared.startSession()
+        ARDepthPipeline.shared.isActive = true
         
         LogStore.shared.log("[RoomPlan] Starting RoomCaptureSession...")
         let session = RoomCaptureSession()
         session.delegate = self
+        
+        // Share the RoomCaptureSession's ARSession with ARDepthPipeline to prevent GPU/camera conflicts
+        session.arSession.delegate = ARDepthPipeline.shared
+        
         self.session = session
         
         let config = RoomCaptureSession.Configuration()
@@ -42,8 +46,8 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         session?.stop()
         session = nil
         
-        // Stop ARDepthPipeline and restore throttleInterval
-        ARDepthPipeline.shared.stopSession()
+        // Disable ARDepthPipeline and restore throttleInterval
+        ARDepthPipeline.shared.isActive = false
         ARDepthPipeline.shared.throttleInterval = 0.20
     }
     
@@ -88,7 +92,7 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
     
     func pauseSession() {
         session?.stop()
-        ARDepthPipeline.shared.pauseSession()
+        ARDepthPipeline.shared.isActive = false
         LogStore.shared.log("[RoomPlan] Session paused (GPU yield).")
     }
     
@@ -96,14 +100,14 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
         guard let session = self.session else { return }
         let config = RoomCaptureSession.Configuration()
         session.run(configuration: config)
-        ARDepthPipeline.shared.resumeSession()
+        
+        // Restore delegate and active state
+        session.arSession.delegate = ARDepthPipeline.shared
+        ARDepthPipeline.shared.isActive = true
         LogStore.shared.log("[RoomPlan] Session resumed.")
     }
     
     func roomCaptureSession(_ session: RoomCaptureSession, didUpdate room: CapturedRoom) {
-        let now = CACurrentMediaTime()
-        guard now - lastAnnouncedTime >= announcementInterval else { return }
-        
         // Get current camera position relative to session origin
         var cameraPos = simd_make_float3(0, 0, 0)
         if let cameraTransform = session.arSession.currentFrame?.camera.transform {
@@ -144,23 +148,19 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
             }
         }
         
-        // Speak results
-        var announcement = ""
+        // Find first announcement for UI presentation
+        let uiAnnouncement: String
         if let firstDoor = doorAnnouncements.first {
-            announcement = firstDoor
-            lastAnnouncedTime = now
-            AudioPipeline.shared.speak(firstDoor)
-            HapticManager.shared.vibrateGeneralInfo()
+            uiAnnouncement = firstDoor
         } else if let firstFurniture = furnitureAnnouncements.first {
-            announcement = firstFurniture
-            lastAnnouncedTime = now
-            AudioPipeline.shared.speak(firstFurniture)
-            HapticManager.shared.vibrateGeneralInfo()
+            uiAnnouncement = firstFurniture
+        } else {
+            uiAnnouncement = ""
         }
         
-        if !announcement.isEmpty {
+        if !uiAnnouncement.isEmpty {
             let userInfo: [AnyHashable: Any] = [
-                "aiResult": announcement,
+                "aiResult": uiAnnouncement,
                 "status": "กำลังสแกนห้อง..."
             ]
             NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
@@ -170,6 +170,14 @@ class RoomPlanManager: NSObject, RoomCaptureSessionDelegate {
                 "status": "กำลังสแกนหาวัตถุ..."
             ]
             NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
+        }
+        
+        // Throttled speech and haptics output (only once per 4 seconds)
+        let now = CACurrentMediaTime()
+        if now - lastAnnouncedTime >= announcementInterval, !uiAnnouncement.isEmpty {
+            lastAnnouncedTime = now
+            AudioPipeline.shared.speak(uiAnnouncement)
+            HapticManager.shared.vibrateGeneralInfo()
         }
     }
     
