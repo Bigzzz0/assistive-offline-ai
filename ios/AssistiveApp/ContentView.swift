@@ -63,6 +63,7 @@ struct ContentView: View {
     @ObservedObject private var downloader = IOSModelDownloader.shared
     @ObservedObject private var logStore = LogStore.shared
     @State private var showDebugConsole: Bool = true
+    @State private var volumeObserver: NSKeyValueObservation?
     
     private var statusLabel: String {
         if isMockMode {
@@ -563,7 +564,17 @@ struct ContentView: View {
             }
             .padding()
         }
-        .background(Color.black.edgesIgnoringSafeArea(.all))
+        .background(
+            Color.black
+                .edgesIgnoringSafeArea(.all)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    triggerCommand(currentMode.command)
+                }
+                .onTapGesture(count: 1) {
+                    announceMode()
+                }
+        )
         .gesture(
             DragGesture().onEnded { value in
                 guard Date().timeIntervalSince(lastModeChangeTime) >= modeSwitchCooldown else { return }
@@ -583,6 +594,10 @@ struct ContentView: View {
             isMockMode = InferenceEngine.shared.initialize() ? InferenceEngine.shared.isMock() : true
             statusText = "ระบบพร้อมทำงาน"
             handleModeChange(to: currentMode)
+            setupVolumeButtonObserver()
+        }
+        .onDisappear {
+            volumeObserver = nil
         }
         .onChange(of: currentMode) { newMode in
             handleModeChange(to: newMode)
@@ -634,6 +649,22 @@ struct ContentView: View {
         VisionPipeline.shared.startSession()
     }
     
+    private func setupVolumeButtonObserver() {
+        let audioSession = AVAudioSession.sharedInstance()
+        var lastVolume = audioSession.outputVolume
+        
+        volumeObserver = audioSession.observe(\.outputVolume, options: [.new]) { _, change in
+            guard let newVolume = change.newValue else { return }
+            if abs(newVolume - lastVolume) > 0.001 {
+                lastVolume = newVolume
+                DispatchQueue.main.async {
+                    vibrateHaptic(level: 1)
+                    triggerCommand(currentMode.command)
+                }
+            }
+        }
+    }
+    
     // MARK: - Actions
     
     private func triggerCommand(_ command: String) {
@@ -654,7 +685,14 @@ struct ContentView: View {
         
         isProcessing = true
         vibrateHaptic(level: 1)
-        speakText("กำลังทำคำสั่ง \(command)")
+        let speechPrompt: String
+        switch command {
+        case "อ่าน": speechPrompt = "กำลังอ่านหนังสือ"
+        case "ดู": speechPrompt = "กำลังสำรวจวัตถุบนโต๊ะ"
+        case "ข้างหน้า": speechPrompt = "กำลังตรวจจับสิ่งกีดขวางด้านหน้า"
+        default: speechPrompt = "กำลังวิเคราะห์ภาพ"
+        }
+        speakText(speechPrompt)
         statusText = "กำลังวิเคราะห์ภาพ..."
         
         let startTime = Date()
@@ -730,7 +768,11 @@ struct ContentView: View {
     }
     
     private func speakText(_ text: String) {
-        AudioPipeline.shared.speak(text)
+        // Strip out any technical confidence labels like "(ความมั่นใจ: สูง)" to make it clean for voice feedback
+        let cleanText = text
+            .replacingOccurrences(of: "\\(ความมั่นใจ:\\s*[^\\)]+\\)", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        AudioPipeline.shared.speak(cleanText)
     }
     
     private func availableSpaceMB() -> Int64 {
