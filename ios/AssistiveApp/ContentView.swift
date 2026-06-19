@@ -82,6 +82,8 @@ struct ContentView: View {
     @State private var showDebugConsole: Bool = true
     @State private var volumeObserver: NSKeyValueObservation?
     
+    private let metricsTimer = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
+    
     private var statusLabel: String {
         if isMockMode {
             return "ระบบพร้อมทำงาน (โหมดจำลอง)"
@@ -424,7 +426,7 @@ struct ContentView: View {
                         vibrateHaptic(level: 1)
                     }) {
                         Text(showDevPanel ? "ซ่อน Dev" : "📊 Dev Panel")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(.footnote, design: .default, weight: .semibold))
                             .foregroundColor(.blue)
                             .padding()
                             .frame(maxWidth: .infinity)
@@ -436,7 +438,7 @@ struct ContentView: View {
                         vibrateHaptic(level: 1)
                     }) {
                         Text(showModelManager ? "ซ่อนโมเดล" : "⬇️ จัดการโมเดล")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(.footnote, design: .default, weight: .semibold))
                             .foregroundColor(.blue)
                             .padding()
                             .frame(maxWidth: .infinity)
@@ -448,7 +450,7 @@ struct ContentView: View {
                 if showModelManager {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("⬇️ จัดการโมเดล AI")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(.subheadline, design: .default, weight: .bold))
                             .foregroundColor(.white)
                         
                         let isVlmReady = IOSModelFile.vlm.isDownloaded
@@ -456,17 +458,17 @@ struct ContentView: View {
                         
                         HStack {
                             Text("📦 VLM (Gemma 4 E2B):")
-                                .font(.system(size: 13))
+                                .font(.system(.footnote))
                                 .foregroundColor(.gray)
                             Spacer()
                             Text(isVlmReady ? String(format: "✅ พร้อม (%.1f MB)", vlmSizeMB) : "❌ ยังไม่ได้โหลด")
-                                .font(.system(size: 13, weight: .bold))
+                                .font(.system(.footnote, design: .default, weight: .bold))
                                 .foregroundColor(isVlmReady ? .green : .red)
                         }
                         
                         let freeSpace = availableSpaceMB()
                         Text("💾 พื้นที่ว่าง: \(freeSpace) MB")
-                            .font(.system(size: 12))
+                            .font(.system(.caption))
                             .foregroundColor(.gray)
                         
                         Divider().background(Color.gray.opacity(0.3))
@@ -476,7 +478,7 @@ struct ContentView: View {
                                 ProgressView(value: downloader.progress)
                                     .accentColor(.blue)
                                 Text(downloader.statusMessage)
-                                    .font(.system(size: 11))
+                                    .font(.system(.caption2))
                                     .foregroundColor(.gray)
                                 
                                 Button(action: {
@@ -484,7 +486,7 @@ struct ContentView: View {
                                     vibrateHaptic(level: 1)
                                 }) {
                                     Text("ยกเลิกการดาวน์โหลด")
-                                        .font(.system(size: 12, weight: .bold))
+                                        .font(.system(.footnote, design: .default, weight: .bold))
                                         .foregroundColor(.red)
                                         .padding(.vertical, 8)
                                         .frame(maxWidth: .infinity)
@@ -498,7 +500,7 @@ struct ContentView: View {
                                     vibrateHaptic(level: 1)
                                 }) {
                                     Text("⬇️ ดาวน์โหลด Gemma 4 Model (~1.5 GB)")
-                                        .font(.system(size: 13, weight: .bold))
+                                        .font(.system(.footnote, design: .default, weight: .bold))
                                         .foregroundColor(.white)
                                         .frame(maxWidth: .infinity)
                                         .frame(height: 44)
@@ -512,7 +514,7 @@ struct ContentView: View {
                                     vibrateHaptic(level: 1)
                                 }) {
                                     Text("🗑️ ลบโมเดล Gemma 4")
-                                        .font(.system(size: 13, weight: .bold))
+                                        .font(.system(.footnote, design: .default, weight: .bold))
                                         .foregroundColor(.white)
                                         .frame(maxWidth: .infinity)
                                         .frame(height: 44)
@@ -524,7 +526,7 @@ struct ContentView: View {
                         
                         if let error = downloader.error {
                             Text(error)
-                                .font(.system(size: 11))
+                                .font(.system(.caption2))
                                 .foregroundColor(.red)
                         }
                         
@@ -533,7 +535,7 @@ struct ContentView: View {
                             vibrateHaptic(level: 1)
                         }) {
                             Text("🔄 โหลดโมเดลใหม่")
-                                .font(.system(size: 13, weight: .bold))
+                                .font(.system(.footnote, design: .default, weight: .bold))
                                 .foregroundColor(.white)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 44)
@@ -551,7 +553,7 @@ struct ContentView: View {
                 if showDevPanel {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("📈 Performance Metrics")
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.system(.footnote, design: .default, weight: .bold))
                             .foregroundColor(Color.cyan)
                         
                         // Latency
@@ -592,8 +594,12 @@ struct ContentView: View {
                     }
                     .padding()
                     .frame(maxWidth: .infinity)
-                    .background(Color(red: 0.05, green: 0.08, blue: 0.15))
+                    .background(Color.white.opacity(0.02))
                     .cornerRadius(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.cyan.opacity(0.3), lineWidth: 1.5)
+                    )
                 }
                 
                 // ---- Collapsible Debug Console Panel ----
@@ -606,7 +612,7 @@ struct ContentView: View {
                         }) {
                             HStack {
                                 Text("📋 Debug Console (\(logStore.logs.count) logs)")
-                                    .font(.system(size: 13, weight: .bold))
+                                    .font(.system(.footnote, design: .default, weight: .bold))
                                 Spacer()
                                 Image(systemName: showDebugConsole ? "chevron.down" : "chevron.up")
                             }
@@ -626,7 +632,7 @@ struct ContentView: View {
                             HStack {
                                 Image(systemName: "doc.on.doc")
                                 Text("ก๊อปปี้")
-                                    .font(.system(size: 13, weight: .bold))
+                                    .font(.system(.footnote, design: .default, weight: .bold))
                             }
                             .foregroundColor(.white)
                             .padding(.horizontal, 12)
@@ -786,6 +792,11 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TriggerOCRNotification"))) { _ in
             triggerCommand("อ่าน")
+        }
+        .onReceive(metricsTimer) { _ in
+            self.memoryUsageMB = PerformanceMonitor.shared.getMemoryUsageMB()
+            self.cpuTempCelsius = PerformanceMonitor.shared.getTemperatureCelsius()
+            self.batteryDrain = PerformanceMonitor.shared.getBatteryDrainMahPerMin()
         }
         .alert("ถามเกี่ยวกับภาพล่าสุด", isPresented: $showQADialog) {
             TextField("ตัวอย่าง: แก้วน้ำอยู่ข้างกุญแจไหม", text: $qaText)
@@ -1009,11 +1020,11 @@ struct iOSMetricRow: View {
         VStack(spacing: 4) {
             HStack {
                 Text(label)
-                    .font(.system(size: 12))
+                    .font(.system(.caption, design: .default, weight: .semibold))
                     .foregroundColor(.gray)
                 Spacer()
                 Text(valueText)
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(.caption, design: .default, weight: .bold))
                     .foregroundColor(color)
             }
             
