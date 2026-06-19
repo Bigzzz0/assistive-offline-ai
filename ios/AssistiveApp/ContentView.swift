@@ -411,6 +411,276 @@ struct ContentView: View {
         }
     }
     
+    private var devAndModelToggles: some View {
+        HStack(spacing: 8) {
+            Button(action: {
+                showDevPanel.toggle()
+                vibrateHaptic(level: 1)
+            }) {
+                Text(showDevPanel ? "ซ่อน Dev" : "📊 Dev Panel")
+                    .font(.system(.footnote, design: .default, weight: .semibold))
+                    .foregroundColor(.blue)
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(RoundedRectangle(cornerRadius: 8).stroke(Color.blue, lineWidth: 1))
+            }
+            
+            Button(action: {
+                showModelManager.toggle()
+                vibrateHaptic(level: 1)
+            }) {
+                Text(showModelManager ? "ซ่อนโมเดล" : "⬇️ จัดการโมเดล")
+                    .font(.system(.footnote, design: .default, weight: .semibold))
+                    .foregroundColor(.blue)
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(RoundedRectangle(cornerRadius: 8).stroke(Color.blue, lineWidth: 1))
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private var modelManagerPanel: some View {
+        if showModelManager {
+            let isVlmReady = IOSModelFile.vlm.isDownloaded
+            let vlmSizeMB = Double(IOSModelFile.vlm.downloadedSize) / 1_048_576.0
+            let freeSpace = availableSpaceMB()
+            
+            VStack(alignment: .leading, spacing: 12) {
+                Text("⬇️ จัดการโมเดล AI")
+                    .font(.system(.subheadline, design: .default, weight: .bold))
+                    .foregroundColor(.white)
+                
+                HStack {
+                    Text("📦 VLM (Gemma 4 E2B):")
+                        .font(.system(.footnote))
+                        .foregroundColor(.gray)
+                    Spacer()
+                    Text(isVlmReady ? String(format: "✅ พร้อม (%.1f MB)", vlmSizeMB) : "❌ ยังไม่ได้โหลด")
+                        .font(.system(.footnote, design: .default, weight: .bold))
+                        .foregroundColor(isVlmReady ? .green : .red)
+                }
+                
+                Text("💾 พื้นที่ว่าง: \(freeSpace) MB")
+                    .font(.system(.caption))
+                    .foregroundColor(.gray)
+                
+                Divider().background(Color.gray.opacity(0.3))
+                
+                if downloader.isDownloading {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ProgressView(value: downloader.progress)
+                            .accentColor(.blue)
+                        Text(downloader.statusMessage)
+                            .font(.system(.caption2))
+                            .foregroundColor(.gray)
+                        
+                        Button(action: {
+                            downloader.cancelDownload()
+                            vibrateHaptic(level: 1)
+                        }) {
+                            Text("ยกเลิกการดาวน์โหลด")
+                                .font(.system(.footnote, design: .default, weight: .bold))
+                                .foregroundColor(.red)
+                                .padding(.vertical, 8)
+                                .frame(maxWidth: .infinity)
+                                .background(RoundedRectangle(cornerRadius: 6).stroke(Color.red, lineWidth: 1))
+                        }
+                    }
+                } else {
+                    if !isVlmReady {
+                        Button(action: {
+                            downloader.startDownload(.vlm)
+                            vibrateHaptic(level: 1)
+                        }) {
+                            Text("⬇️ ดาวน์โหลด Gemma 4 Model (~1.5 GB)")
+                                .font(.system(.footnote, design: .default, weight: .bold))
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 44)
+                                .background(Color.blue)
+                                .cornerRadius(8)
+                        }
+                    } else {
+                        Button(action: {
+                            downloader.deleteModel(.vlm)
+                            isMockMode = InferenceEngine.shared.initialize(force: true) ? InferenceEngine.shared.isMock() : true
+                            vibrateHaptic(level: 1)
+                        }) {
+                            Text("🗑️ ลบโมเดล Gemma 4")
+                                .font(.system(.footnote, design: .default, weight: .bold))
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 44)
+                                .background(Color.red)
+                                .cornerRadius(8)
+                        }
+                    }
+                }
+                
+                if let error = downloader.error {
+                    Text(error)
+                        .font(.system(.caption2))
+                        .foregroundColor(.red)
+                }
+                
+                Button(action: {
+                    isMockMode = InferenceEngine.shared.initialize(force: true) ? InferenceEngine.shared.isMock() : true
+                    vibrateHaptic(level: 1)
+                }) {
+                    Text("🔄 โหลดโมเดลใหม่")
+                        .font(.system(.footnote, design: .default, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .background(Color.green)
+                        .cornerRadius(8)
+                }
+            }
+            .padding()
+            .frame(maxWidth: .infinity)
+            .background(Color(red: 0.1, green: 0.15, blue: 0.27))
+            .cornerRadius(12)
+        }
+    }
+    
+    @ViewBuilder
+    private var performancePanel: some View {
+        if showDevPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("📈 Performance Metrics")
+                    .font(.system(.footnote, design: .default, weight: .bold))
+                    .foregroundColor(Color.cyan)
+                
+                // Latency
+                iOSMetricRow(
+                    label: "Inference Latency",
+                    valueText: "\(lastLatencyMs) ms",
+                    progress: Float(lastLatencyMs) / 5000.0,
+                    color: lastLatencyMs < 3000 ? .green : .red,
+                    accessibilityText: "เวลาประมวลผลเอไอภาพล่าสุด \(lastLatencyMs) มิลลิวินาที สถานะปกติ"
+                )
+                
+                // Memory
+                iOSMetricRow(
+                    label: "Memory Usage",
+                    valueText: String(format: "%.0f MB", memoryUsageMB),
+                    progress: memoryUsageMB / 6000.0,
+                    color: memoryUsageMB < 4000 ? .green : .red,
+                    accessibilityText: "การใช้งานหน่วยความจำของแอป \(Int(memoryUsageMB)) เมกะไบต์"
+                )
+                
+                // Temperature
+                iOSMetricRow(
+                    label: "Temperature",
+                    valueText: String(format: "%.0f °C", cpuTempCelsius),
+                    progress: cpuTempCelsius / 60.0,
+                    color: cpuTempCelsius < 45 ? .green : (cpuTempCelsius < 55 ? .orange : .red),
+                    accessibilityText: "อุณหภูมิหน่วยประมวลผล \(Int(cpuTempCelsius)) องศาเซลเซียส สถานะปกติ"
+                )
+                
+                // Battery
+                iOSMetricRow(
+                    label: "Battery Drain",
+                    valueText: String(format: "%.1f mAh/min", batteryDrain),
+                    progress: batteryDrain / 20.0,
+                    color: batteryDrain < 15 ? .green : .red,
+                    accessibilityText: "อัตราสิ้นเปลืองพลังงานแบตเตอรี่ \(batteryDrain) มิลลิแอมป์ต่อนาที"
+                )
+            }
+            .padding()
+            .frame(maxWidth: .infinity)
+            .background(Color.white.opacity(0.02))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.cyan.opacity(0.3), lineWidth: 1.5)
+            )
+        }
+    }
+    
+    @ViewBuilder
+    private var debugConsolePanel: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Button(action: {
+                    withAnimation {
+                        showDebugConsole.toggle()
+                    }
+                }) {
+                    HStack {
+                        Text("📋 Debug Console (\(logStore.logs.count) logs)")
+                            .font(.system(.footnote, design: .default, weight: .bold))
+                        Spacer()
+                        Image(systemName: showDebugConsole ? "chevron.down" : "chevron.up")
+                    }
+                    .foregroundColor(.cyan)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color.cyan.opacity(0.1))
+                    .cornerRadius(6)
+                }
+                
+                Button(action: {
+                    let allLogs = logStore.logs.joined(separator: "\n")
+                    UIPasteboard.general.string = allLogs
+                    vibrateHaptic(level: 1)
+                    speakText("คัดลอกบันทึกสำเร็จ")
+                }) {
+                    HStack {
+                        Image(systemName: "doc.on.doc")
+                        Text("ก๊อปปี้")
+                            .font(.system(.footnote, design: .default, weight: .bold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.cyan)
+                    .cornerRadius(6)
+                }
+                .accessibilityLabel("คัดลอกบันทึกทั้งหมด")
+            }
+            
+            if showDebugConsole {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if logStore.logs.isEmpty {
+                                Text("[No logs recorded yet]")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(.gray)
+                            } else {
+                                ForEach(logStore.logs, id: \.self) { log in
+                                    Text(log)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundColor(.green)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .id(log)
+                                }
+                            }
+                        }
+                        .padding(6)
+                    }
+                    .frame(height: 150)
+                    .background(Color.black.opacity(0.85))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
+                    )
+                    .onChange(of: logStore.logs.count) { _ in
+                        if let lastLog = logStore.logs.last {
+                            withAnimation {
+                                proxy.scrollTo(lastLog, anchor: .bottom)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.top, 8)
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
@@ -419,268 +689,10 @@ struct ContentView: View {
                 cameraViewport
                 statusAndOutputViews
                 actionButtons
-                // ---- Dev Panel + Model Manager toggles ----
-                HStack(spacing: 8) {
-                    Button(action: {
-                        showDevPanel.toggle()
-                        vibrateHaptic(level: 1)
-                    }) {
-                        Text(showDevPanel ? "ซ่อน Dev" : "📊 Dev Panel")
-                            .font(.system(.footnote, design: .default, weight: .semibold))
-                            .foregroundColor(.blue)
-                            .padding()
-                            .frame(maxWidth: .infinity)
-                            .background(RoundedRectangle(cornerRadius: 8).stroke(Color.blue, lineWidth: 1))
-                    }
-                    
-                    Button(action: {
-                        showModelManager.toggle()
-                        vibrateHaptic(level: 1)
-                    }) {
-                        Text(showModelManager ? "ซ่อนโมเดล" : "⬇️ จัดการโมเดล")
-                            .font(.system(.footnote, design: .default, weight: .semibold))
-                            .foregroundColor(.blue)
-                            .padding()
-                            .frame(maxWidth: .infinity)
-                            .background(RoundedRectangle(cornerRadius: 8).stroke(Color.blue, lineWidth: 1))
-                    }
-                }
-                
-                // ---- Model Manager Panel ----
-                if showModelManager {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("⬇️ จัดการโมเดล AI")
-                            .font(.system(.subheadline, design: .default, weight: .bold))
-                            .foregroundColor(.white)
-                        
-                        let isVlmReady = IOSModelFile.vlm.isDownloaded
-                        let vlmSizeMB = Double(IOSModelFile.vlm.downloadedSize) / 1_048_576.0
-                        
-                        HStack {
-                            Text("📦 VLM (Gemma 4 E2B):")
-                                .font(.system(.footnote))
-                                .foregroundColor(.gray)
-                            Spacer()
-                            Text(isVlmReady ? String(format: "✅ พร้อม (%.1f MB)", vlmSizeMB) : "❌ ยังไม่ได้โหลด")
-                                .font(.system(.footnote, design: .default, weight: .bold))
-                                .foregroundColor(isVlmReady ? .green : .red)
-                        }
-                        
-                        let freeSpace = availableSpaceMB()
-                        Text("💾 พื้นที่ว่าง: \(freeSpace) MB")
-                            .font(.system(.caption))
-                            .foregroundColor(.gray)
-                        
-                        Divider().background(Color.gray.opacity(0.3))
-                        
-                        if downloader.isDownloading {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ProgressView(value: downloader.progress)
-                                    .accentColor(.blue)
-                                Text(downloader.statusMessage)
-                                    .font(.system(.caption2))
-                                    .foregroundColor(.gray)
-                                
-                                Button(action: {
-                                    downloader.cancelDownload()
-                                    vibrateHaptic(level: 1)
-                                }) {
-                                    Text("ยกเลิกการดาวน์โหลด")
-                                        .font(.system(.footnote, design: .default, weight: .bold))
-                                        .foregroundColor(.red)
-                                        .padding(.vertical, 8)
-                                        .frame(maxWidth: .infinity)
-                                        .background(RoundedRectangle(cornerRadius: 6).stroke(Color.red, lineWidth: 1))
-                                }
-                            }
-                        } else {
-                            if !isVlmReady {
-                                Button(action: {
-                                    downloader.startDownload(.vlm)
-                                    vibrateHaptic(level: 1)
-                                }) {
-                                    Text("⬇️ ดาวน์โหลด Gemma 4 Model (~1.5 GB)")
-                                        .font(.system(.footnote, design: .default, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .frame(maxWidth: .infinity)
-                                        .frame(height: 44)
-                                        .background(Color.blue)
-                                        .cornerRadius(8)
-                                }
-                            } else {
-                                Button(action: {
-                                    downloader.deleteModel(.vlm)
-                                    isMockMode = InferenceEngine.shared.initialize(force: true) ? InferenceEngine.shared.isMock() : true
-                                    vibrateHaptic(level: 1)
-                                }) {
-                                    Text("🗑️ ลบโมเดล Gemma 4")
-                                        .font(.system(.footnote, design: .default, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .frame(maxWidth: .infinity)
-                                        .frame(height: 44)
-                                        .background(Color.red)
-                                        .cornerRadius(8)
-                                }
-                            }
-                        }
-                        
-                        if let error = downloader.error {
-                            Text(error)
-                                .font(.system(.caption2))
-                                .foregroundColor(.red)
-                        }
-                        
-                        Button(action: {
-                            isMockMode = InferenceEngine.shared.initialize(force: true) ? InferenceEngine.shared.isMock() : true
-                            vibrateHaptic(level: 1)
-                        }) {
-                            Text("🔄 โหลดโมเดลใหม่")
-                                .font(.system(.footnote, design: .default, weight: .bold))
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 44)
-                                .background(Color.green)
-                                .cornerRadius(8)
-                        }
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(Color(red: 0.1, green: 0.15, blue: 0.27))
-                    .cornerRadius(12)
-                }
-                
-                // ---- Performance Panel ----
-                if showDevPanel {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("📈 Performance Metrics")
-                            .font(.system(.footnote, design: .default, weight: .bold))
-                            .foregroundColor(Color.cyan)
-                        
-                        // Latency
-                        iOSMetricRow(
-                            label: "Inference Latency",
-                            valueText: "\(lastLatencyMs) ms",
-                            progress: Float(lastLatencyMs) / 5000.0,
-                            color: lastLatencyMs < 3000 ? .green : .red,
-                            accessibilityText: "เวลาประมวลผลเอไอภาพล่าสุด \(lastLatencyMs) มิลลิวินาที สถานะปกติ"
-                        )
-                        
-                        // Memory
-                        iOSMetricRow(
-                            label: "Memory Usage",
-                            valueText: String(format: "%.0f MB", memoryUsageMB),
-                            progress: memoryUsageMB / 6000.0,
-                            color: memoryUsageMB < 4000 ? .green : .red,
-                            accessibilityText: "การใช้งานหน่วยความจำของแอป \(Int(memoryUsageMB)) เมกะไบต์"
-                        )
-                        
-                        // Temperature
-                        iOSMetricRow(
-                            label: "Temperature",
-                            valueText: String(format: "%.0f °C", cpuTempCelsius),
-                            progress: cpuTempCelsius / 60.0,
-                            color: cpuTempCelsius < 45 ? .green : (cpuTempCelsius < 55 ? .orange : .red),
-                            accessibilityText: "อุณหภูมิหน่วยประมวลผล \(Int(cpuTempCelsius)) องศาเซลเซียส สถานะปกติ"
-                        )
-                        
-                        // Battery
-                        iOSMetricRow(
-                            label: "Battery Drain",
-                            valueText: String(format: "%.1f mAh/min", batteryDrain),
-                            progress: batteryDrain / 20.0,
-                            color: batteryDrain < 15 ? .green : .red,
-                            accessibilityText: "อัตราสิ้นเปลืองพลังงานแบตเตอรี่ \(batteryDrain) มิลลิแอมป์ต่อนาที"
-                        )
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(Color.white.opacity(0.02))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.cyan.opacity(0.3), lineWidth: 1.5)
-                    )
-                }
-                
-                // ---- Collapsible Debug Console Panel ----
-                VStack(spacing: 8) {
-                    HStack(spacing: 8) {
-                        Button(action: {
-                            withAnimation {
-                                showDebugConsole.toggle()
-                            }
-                        }) {
-                            HStack {
-                                Text("📋 Debug Console (\(logStore.logs.count) logs)")
-                                    .font(.system(.footnote, design: .default, weight: .bold))
-                                Spacer()
-                                Image(systemName: showDebugConsole ? "chevron.down" : "chevron.up")
-                            }
-                            .foregroundColor(.cyan)
-                            .padding(.horizontal)
-                            .padding(.vertical, 8)
-                            .background(Color.cyan.opacity(0.1))
-                            .cornerRadius(6)
-                        }
-                        
-                        Button(action: {
-                            let allLogs = logStore.logs.joined(separator: "\n")
-                            UIPasteboard.general.string = allLogs
-                            vibrateHaptic(level: 1)
-                            speakText("คัดลอกบันทึกสำเร็จ")
-                        }) {
-                            HStack {
-                                Image(systemName: "doc.on.doc")
-                                Text("ก๊อปปี้")
-                                    .font(.system(.footnote, design: .default, weight: .bold))
-                            }
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(Color.cyan)
-                            .cornerRadius(6)
-                        }
-                        .accessibilityLabel("คัดลอกบันทึกทั้งหมด")
-                    }
-                    
-                    if showDebugConsole {
-                        ScrollViewReader { proxy in
-                            ScrollView {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    if logStore.logs.isEmpty {
-                                        Text("[No logs recorded yet]")
-                                            .font(.system(size: 10, design: .monospaced))
-                                            .foregroundColor(.gray)
-                                    } else {
-                                        ForEach(logStore.logs, id: \.self) { log in
-                                            Text(log)
-                                                .font(.system(size: 10, design: .monospaced))
-                                                .foregroundColor(.green)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                                .id(log)
-                                        }
-                                    }
-                                }
-                                .padding(6)
-                            }
-                            .frame(height: 150)
-                            .background(Color.black.opacity(0.85))
-                            .cornerRadius(8)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
-                            )
-                            .onChange(of: logStore.logs.count) { _ in
-                                if let lastLog = logStore.logs.last {
-                                    withAnimation {
-                                        proxy.scrollTo(lastLog, anchor: .bottom)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                .padding(.top, 8)
+                devAndModelToggles
+                modelManagerPanel
+                performancePanel
+                debugConsolePanel
             }
             .padding()
         }
