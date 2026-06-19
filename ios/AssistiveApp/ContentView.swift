@@ -31,6 +31,17 @@ enum ActiveMode: String, CaseIterable {
         }
     }
     
+    var accentColor: Color {
+        switch self {
+        case .read: return Color(red: 0.0, green: 0.48, blue: 1.0) // Electric Blue
+        case .object: return Color(red: 0.2, green: 0.82, blue: 0.35) // Emerald Green
+        case .obstacle: return Color(red: 1.0, green: 0.8, blue: 0.0) // Amber Yellow
+        case .pointAndSpeak: return Color(red: 0.75, green: 0.35, blue: 0.95) // Orchid Purple
+        case .peopleDetection: return Color(red: 1.0, green: 0.22, blue: 0.37) // Neon Rose Pink
+        case .roomPlan: return Color(red: 0.19, green: 0.84, blue: 0.78) // Aqua Teal
+        }
+    }
+    
     func next() -> ActiveMode {
         let all = ActiveMode.allCases
         guard let idx = all.firstIndex(of: self) else { return .object }
@@ -59,6 +70,8 @@ struct ContentView: View {
     @State private var qaText: String = ""
     @State private var hasCapturedImage: Bool = false
     @State private var speechRateState: Float = AudioPipeline.shared.speechRate
+    
+    @Environment(\.dynamicTypeSize) private var sizeCategory
     
     // Camera permission state
     @State private var cameraAuthorized: Bool = false
@@ -97,44 +110,55 @@ struct ContentView: View {
     @State private var averageLatencyMs: Int = 0
     
     private var headerView: some View {
-        HStack {
+        let layout = sizeCategory >= .accessibility1 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout())
+        return layout {
             Text("ASSISTIVE OFFLINE AI")
-                .font(.system(size: 20, weight: .bold))
+                .font(.system(.title3, design: .default, weight: .bold))
                 .foregroundColor(.white)
-            Spacer()
-            Text(isMockMode ? "⚠️ Mock" : "✅ Real Mode")
-                .font(.system(size: 11, weight: .semibold))
+                .accessibilityAddTraits(.isHeader)
+            if sizeCategory < .accessibility1 { Spacer() }
+            Text(isMockMode ? "⚠️ Mock Mode" : "✅ Real Mode")
+                .font(.system(.footnote, design: .default, weight: .semibold))
                 .foregroundColor(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(isMockMode ? Color.gray : Color.green)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(isMockMode ? Color.gray.opacity(0.4) : Color.green.opacity(0.4))
                 .cornerRadius(16)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(isMockMode ? Color.gray : Color.green, lineWidth: 1.5)
+                )
         }
         .padding(.top, 10)
     }
     
     private var activeModeBannerAndSpeedRow: some View {
-        VStack(spacing: 12) {
+        let rateLayout = sizeCategory >= .accessibility1 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout())
+        return VStack(spacing: 16) {
             // ---- Active Mode Banner ----
-            VStack(spacing: 4) {
+            VStack(spacing: 6) {
                 Text("โหมดใช้งานสัมผัสปัจจุบัน")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(.caption, design: .default, weight: .bold))
                     .foregroundColor(.gray)
                 Text(currentMode.rawValue)
-                    .font(.system(size: 22, weight: .bold))
+                    .font(.system(.title, design: .default, weight: .bold))
                     .foregroundColor(.white)
+                    .lineLimit(nil)
+                    .minimumScaleFactor(0.85)
                 Text("ปัดซ้าย/ขวาเพื่อเปลี่ยน | แตะสองครั้งที่กล้องเพื่อทำงาน")
-                    .font(.system(size: 11))
-                    .foregroundColor(Color.blue)
+                    .font(.system(.footnote))
+                    .foregroundColor(currentMode.accentColor)
                     .multilineTextAlignment(.center)
+                    .padding(.top, 2)
             }
             .padding()
             .frame(maxWidth: .infinity)
-            .background(Color(red: 0.12, green: 0.16, blue: 0.23))
-            .cornerRadius(12)
+            .background(Color.white.opacity(0.04))
+            .cornerRadius(16)
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.blue, lineWidth: 2)
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(currentMode.accentColor, lineWidth: 2)
+                    .shadow(color: currentMode.accentColor.opacity(0.3), radius: 6)
             )
             .accessibilityElement(children: .combine)
             .accessibilityLabel("โหมดใช้งานสัมผัสปัจจุบันคือ \(currentMode.speech)")
@@ -153,24 +177,26 @@ struct ContentView: View {
             }
             
             // ---- TTS Speech Speed Control ----
-            HStack {
-                Image(systemName: "speedometer")
-                    .foregroundColor(.cyan)
-                Text("ความเร็วเสียงพูด:")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.gray)
-                Spacer()
+            rateLayout {
+                HStack(spacing: 8) {
+                    Image(systemName: "speedometer")
+                        .foregroundColor(currentMode.accentColor)
+                    Text("ความเร็วเสียงพูด:")
+                        .font(.system(.subheadline, design: .default, weight: .semibold))
+                        .foregroundColor(.gray)
+                }
+                if sizeCategory < .accessibility1 { Spacer() }
                 Text(speechRateText)
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(.cyan)
+                    .font(.system(.body, design: .default, weight: .bold))
+                    .foregroundColor(currentMode.accentColor)
             }
             .padding()
             .frame(maxWidth: .infinity)
-            .background(Color(red: 0.08, green: 0.08, blue: 0.08))
-            .cornerRadius(12)
+            .background(Color.white.opacity(0.02))
+            .cornerRadius(16)
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(currentMode.accentColor.opacity(0.3), lineWidth: 1.5)
             )
             .accessibilityElement(children: .combine)
             .accessibilityLabel("ปรับความเร็วเสียงพูด")
@@ -228,7 +254,7 @@ struct ContentView: View {
                         .font(.system(size: 40))
                         .foregroundColor(.gray)
                     Text(cameraAuthorized ? "กำลังเตรียมกล้อง..." : "กรุณาอนุญาตการใช้กล้อง")
-                        .font(.system(size: 12))
+                        .font(.system(.footnote))
                         .foregroundColor(.gray)
                         .padding(.top, 4)
                 }
@@ -237,17 +263,22 @@ struct ContentView: View {
             VStack {
                 Spacer()
                 Text(isProcessing ? "กำลังประมวลผล..." : "แตะสองครั้งเพื่อวิเคราะห์ภาพ")
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.7))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.5))
-                    .cornerRadius(8)
-                    .padding(.bottom, 8)
+                    .font(.system(.caption, design: .default, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.8))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.black.opacity(0.6))
+                    .cornerRadius(10)
+                    .padding(.bottom, 10)
             }
         }
-        .frame(height: 250)
+        .frame(minHeight: 250)
         .cornerRadius(16)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(currentMode.accentColor, lineWidth: 2)
+                .shadow(color: currentMode.accentColor.opacity(0.3), radius: 6)
+        )
         .gesture(
             TapGesture(count: 2).onEnded {
                 triggerCommand(currentMode.command)
@@ -261,31 +292,32 @@ struct ContentView: View {
     }
     
     private var statusAndOutputViews: some View {
-        VStack(spacing: 16) {
+        let statusLayout = sizeCategory >= .accessibility1 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout())
+        return VStack(spacing: 16) {
             // ---- Status Card ----
-            HStack {
+            statusLayout {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("สถานะระบบ")
-                        .font(.system(size: 12))
+                        .font(.system(.caption, design: .default, weight: .semibold))
                         .foregroundColor(.gray)
                     Text(statusLabel)
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(isMockMode ? .gray : (!InferenceEngine.shared.isReady() ? .yellow : .green))
+                        .font(.system(.body, design: .default, weight: .bold))
+                        .foregroundColor(isMockMode ? .gray : (!InferenceEngine.shared.isReady() ? .yellow : currentMode.accentColor))
                 }
-                Spacer()
+                if sizeCategory < .accessibility1 { Spacer() }
                 if lastLatencyMs > 0 {
                     Text("\(lastLatencyMs)ms")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(isMockMode ? .gray : (!InferenceEngine.shared.isReady() ? .yellow : .green))
+                        .font(.system(.headline, design: .default, weight: .bold))
+                        .foregroundColor(isMockMode ? .gray : (!InferenceEngine.shared.isReady() ? .yellow : currentMode.accentColor))
                 }
             }
             .padding()
             .frame(maxWidth: .infinity)
-            .background(Color(red: 0.07, green: 0.07, blue: 0.07))
-            .cornerRadius(12)
+            .background(Color.white.opacity(0.02))
+            .cornerRadius(16)
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isMockMode ? Color.gray : (!InferenceEngine.shared.isReady() ? Color.yellow : Color.green), lineWidth: 2)
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(isMockMode ? Color.gray : (!InferenceEngine.shared.isReady() ? Color.yellow : currentMode.accentColor), lineWidth: 2)
             )
             .accessibilityElement(children: .combine)
             .accessibilityLabel("สถานะระบบ \(statusText) การวิเคราะห์ภาพล่าสุดใช้เวลา \(lastLatencyMs) มิลลิวินาที")
@@ -293,18 +325,21 @@ struct ContentView: View {
             // ---- AI Output Box ----
             VStack {
                 Text(aiResultText.isEmpty ? "ระบบจะอธิบายภาพผ่านเสียงพูดและการสั่น\nปัดซ้ายขวาเพื่อปรับโหมด หรือแตะกล้องเพื่อเริ่ม" : aiResultText)
-                    .font(.system(size: aiResultText.isEmpty ? 16 : 20, weight: .medium))
+                    .font(.system(aiResultText.isEmpty ? .body : .title3, design: .default, weight: .medium))
                     .foregroundColor(aiResultText.isEmpty ? .gray : .white)
                     .multilineTextAlignment(.center)
+                    .lineLimit(nil)
+                    .minimumScaleFactor(0.85)
                     .padding()
             }
             .frame(maxWidth: .infinity)
-            .frame(minHeight: 120)
-            .background(Color.black)
+            .frame(minHeight: 140)
+            .background(Color.black.opacity(0.4))
             .cornerRadius(16)
             .overlay(
                 RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.white, lineWidth: 2)
+                    .stroke(Color.white.opacity(0.6), lineWidth: 1.5)
+                    .shadow(color: Color.white.opacity(0.1), radius: 4)
             )
             .onTapGesture {
                 speakText(aiResultText.isEmpty ? "ระบบจะอธิบายภาพผ่านเสียงพูดและการสั่น" : aiResultText)
@@ -315,98 +350,62 @@ struct ContentView: View {
     }
     
     private var actionButtons: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             if hasCapturedImage || InferenceEngine.shared.lastCapturedImage != nil {
                 Button(action: {
                     qaText = ""
                     showQADialog = true
-                    vibrateHaptic(level: 1)
+                    HapticManager.shared.vibrateGeneralInfo()
                 }) {
-                    HStack {
+                    HStack(spacing: 12) {
                         Image(systemName: "bubble.left.and.bubble.right.fill")
-                        Text("💬 ถามเกี่ยวกับภาพล่าสุด (Q&A)")
-                            .font(.system(size: 18, weight: .bold))
+                        Text("ถามเกี่ยวกับภาพล่าสุด (Q&A)")
+                            .font(.system(.body, design: .default, weight: .bold))
                     }
                     .foregroundColor(.white)
+                    .padding(.vertical, 16)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 60)
-                    .background(Color.purple)
-                    .cornerRadius(12)
+                    .frame(minHeight: 64)
+                    .background(Color.purple.opacity(0.8))
+                    .cornerRadius(16)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.purple, lineWidth: 1.5)
+                    )
                 }
                 .accessibilityLabel("ปุ่มถามตอบเกี่ยวกับภาพล่าสุด แตะสองครั้งเพื่อป้อนคำถาม")
             }
             
-            Button(action: { triggerCommand("อ่าน") }) {
-                Text("📖 อ่านข้อความ (OCR)")
-                    .font(.system(size: 18, weight: .bold))
+            ForEach(ActiveMode.allCases, id: \.self) { mode in
+                Button(action: {
+                    currentMode = mode
+                    triggerCommand(mode.command)
+                }) {
+                    HStack(spacing: 12) {
+                        let isSelected = currentMode == mode
+                        Text(mode.rawValue)
+                            .font(.system(.body, design: .default, weight: isSelected ? .bold : .semibold))
+                        Spacer()
+                        if isSelected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.white)
+                        }
+                    }
                     .foregroundColor(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 60)
-                    .background(Color.blue)
-                    .cornerRadius(12)
+                    .frame(minHeight: 64)
+                    .background(mode.accentColor.opacity(currentMode == mode ? 0.85 : 0.2))
+                    .cornerRadius(16)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(mode.accentColor, lineWidth: currentMode == mode ? 2.5 : 1.0)
+                            .shadow(color: mode.accentColor.opacity(currentMode == mode ? 0.5 : 0.0), radius: 4)
+                    )
+                }
+                .accessibilityLabel("ปุ่ม\(mode.speech)\(currentMode == mode ? " กำลังเลือกอยู่" : "")")
             }
-            .accessibilityLabel("ปุ่มอ่านข้อความบนหนังสือ")
-            
-            Button(action: { triggerCommand("ดู") }) {
-                Text("👁️ ดูสิ่งของบนโต๊ะ")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 60)
-                    .background(Color.green)
-                    .cornerRadius(12)
-            }
-            .accessibilityLabel("ปุ่มตรวจหาสิ่งของรอบตัว")
-            
-            Button(action: { triggerCommand("ข้างหน้า") }) {
-                Text("🚧 ตรวจสิ่งกีดขวางข้างหน้า")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 60)
-                    .background(Color.orange)
-                    .cornerRadius(12)
-            }
-            .accessibilityLabel("ปุ่มตรวจสอบสิ่งกีดขวางทางเดินด้านหน้า")
-            
-            Button(action: {
-                currentMode = .pointAndSpeak
-            }) {
-                Text("👉 ชี้นิ้วแล้วอ่าน (Point & Speak)")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 60)
-                    .background(Color.purple)
-                    .cornerRadius(12)
-            }
-            .accessibilityLabel("ปุ่มชี้นิ้วแล้วอ่านข้อความที่ปลายนิ้วสัมผัส")
-            
-            Button(action: {
-                currentMode = .peopleDetection
-            }) {
-                Text("👤 เตือนระยะคน (People Alert)")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 60)
-                    .background(Color.pink)
-                    .cornerRadius(12)
-            }
-            .accessibilityLabel("ปุ่มเตือนระยะห่างคนรอบตัวด้วยเสียงและการสั่น")
-            
-            Button(action: {
-                currentMode = .roomPlan
-            }) {
-                Text("🪑 ค้นหาเก้าอี้และประตู (LiDAR)")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 60)
-                    .background(Color.teal)
-                    .cornerRadius(12)
-            }
-            .accessibilityLabel("ปุ่มค้นหาเก้าอี้และประตูรอบตัวโดยใช้ไรดาร์สแกน")
         }
     }
     
@@ -680,15 +679,19 @@ struct ContentView: View {
             .padding()
         }
         .background(
-            Color.black
-                .edgesIgnoringSafeArea(.all)
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) {
-                    triggerCommand(currentMode.command)
-                }
-                .onTapGesture(count: 1) {
-                    announceMode()
-                }
+            LinearGradient(
+                gradient: Gradient(colors: [Color(red: 0.02, green: 0.03, blue: 0.05), Color(red: 0.05, green: 0.07, blue: 0.12)]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .edgesIgnoringSafeArea(.all)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                triggerCommand(currentMode.command)
+            }
+            .onTapGesture(count: 1) {
+                announceMode()
+            }
         )
         .gesture(
             DragGesture().onEnded { value in
@@ -733,6 +736,22 @@ struct ContentView: View {
                 }
             }
         )
+        .accessibilityAction(named: "สลับโหมดถัดไป") {
+            currentMode = currentMode.next()
+            announceMode()
+        }
+        .accessibilityAction(named: "สลับโหมดก่อนหน้า") {
+            currentMode = currentMode.previous()
+            announceMode()
+        }
+        .accessibilityAction(named: "วิเคราะห์ภาพใหม่") {
+            triggerCommand(currentMode.command)
+        }
+        .accessibilityAction(named: "ถามคำถามเกี่ยวกับภาพ") {
+            qaText = ""
+            showQADialog = true
+            HapticManager.shared.vibrateGeneralInfo()
+        }
         .onAppear {
             requestCameraPermission()
             isMockMode = InferenceEngine.shared.initialize() ? InferenceEngine.shared.isMock() : true
@@ -924,7 +943,7 @@ struct ContentView: View {
     }
 
     private func announceMode() {
-        vibrateHaptic(level: 1)
+        HapticManager.shared.vibrateTick()
         speakText(currentMode.speech)
     }
     
