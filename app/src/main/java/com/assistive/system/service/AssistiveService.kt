@@ -229,23 +229,45 @@ class AssistiveService : Service() {
                 val fullResponse = StringBuilder()
                 val startTime = System.currentTimeMillis()
 
-                // Pause microphone listening thread during VLM inference to avoid CPU/thread contention
-                audioPipeline.pauseListening()
+            // Pause microphone listening thread during VLM inference to avoid CPU/thread contention
+            audioPipeline.pauseListening()
 
-                try {
-                    var tokenCount = 0
-                    val maxTokens = inferenceEngine.getMaxNumTokensSetting()
-                    inferenceEngine.analyzeImageStream(task.imageBytes, task.prompt).collect { token ->
-                        fullResponse.append(token)
-                        _inferenceOutput.value = fullResponse.toString()
-                        tokenCount++
-                        val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
-                        val pct = ((tokenCount.toFloat() / maxTokens) * 100).toInt().coerceAtMost(100)
-                        _serviceStatus.value = "กำลังประมวลผลด้วย AI... $pct% ($tokenCount/$maxTokens, ${"%.1f".format(elapsedSec)}s)"
-                    }
-                } finally {
-                    // Resume ASR listening thread
-                    audioPipeline.resumeListening()
+            try {
+                inferenceEngine.analyzeImageStream(task.imageBytes, task.prompt).collect { token ->
+                    fullResponse.append(token)
+                    _inferenceOutput.value = fullResponse.toString()
+                }
+            } finally {
+                // Resume ASR listening thread
+                audioPipeline.resumeListening()
+            }
+
+            val latencyMs = System.currentTimeMillis() - startTime
+            val tokenCount = fullResponse.split(" ").size
+            performanceMonitor.recordInference(latencyMs, tokenCount)
+            performanceMonitor.refreshMemoryUsage()
+            performanceMonitor.refreshTemperature()
+            performanceMonitor.refreshBatteryDrain()
+
+            val finalOutput = fullResponse.toString()
+            val validatedOutput = if (task.prompt.contains("อ่าน")) {
+                com.assistive.system.ai.OcrPostValidator.validateOcrResult(finalOutput)
+            } else {
+                finalOutput
+            }
+
+            _inferenceOutput.value = validatedOutput
+            _serviceStatus.value = "ระบบพร้อมทำงาน (${latencyMs}ms)"
+
+            // Trigger Haptic Feedback based on the VLM output severity
+            triggerResponseHaptics(validatedOutput)
+
+            // Speak the VLM output
+            audioPipeline.speak(validatedOutput) {
+                serviceScope.launch {
+                    isAnalyzing = false
+                    _currentlyAnalyzingBitmap.value = null
+                    processNextTask()
                 }
 
                 val latencyMs = System.currentTimeMillis() - startTime
