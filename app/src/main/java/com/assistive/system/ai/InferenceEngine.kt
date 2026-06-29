@@ -40,8 +40,46 @@ class InferenceEngine(
     private var isInitialized = false
     private var isMockMode = false
 
-    // System Prompt to enforce constraint decoding format (Thai BLV Assistant)
-    private val systemPrompt = """
+    private val prefs = context.getSharedPreferences("vlm_settings", Context.MODE_PRIVATE)
+
+    fun getMaxNumTokensSetting(): Int = prefs.getInt("max_num_tokens", 512)
+    fun getVisualTokenBudgetSetting(): Int = prefs.getInt("visual_token_budget", -1) // -1 for dynamic
+    fun getImageResolutionSetting(): Int = prefs.getInt("vlm_image_resolution", 224)
+
+    fun updateSettings(maxTokens: Int, visualBudget: Int, resolution: Int) {
+        prefs.edit().apply {
+            putInt("max_num_tokens", maxTokens)
+            putInt("visual_token_budget", visualBudget)
+            putInt("vlm_image_resolution", resolution)
+            apply()
+        }
+    }
+
+    // Intent-specific system prompts
+    private val ocrSystemPrompt = """
+        บทบาท: คุณคือเครื่องอ่านข้อความ (OCR) ภาษาไทยและภาษาอังกฤษที่แม่นยำ
+        หน้าที่: ถอดความข้อความ ตัวอักษร สัญลักษณ์ และตัวเลขทั้งหมดที่เห็นในภาพออกมาคำต่อคำอย่างถูกต้อง ห้ามสมมติหรือตีความเพิ่มเติม ห้ามใช้รูปแบบวัตถุเด็ดขาด หากไม่มีข้อความให้บอกว่า "ไม่พบข้อความในภาพ"
+    """.trimIndent()
+
+    private val objectSystemPrompt = """
+        บทบาท: คุณคือผู้ช่วยระบุสิ่งของสำหรับคนตาบอดภาษาไทย
+        รูปแบบคำตอบที่บังคับ: [ชื่อวัตถุ] - [ตำแหน่งโดยประมาณ] (ความมั่นใจ: [ต่ำ/ปานกลาง/สูง])
+        ตัวอย่าง: แก้วน้ำ - บนโต๊ะด้านหน้าขวา (ความมั่นใจ: สูง)
+        ห้ามอธิบายยาว ห้ามใช้คำฟุ่มเฟือย
+    """.trimIndent()
+
+    private val obstacleSystemPrompt = """
+        บทบาท: คุณคือระบบเตือนภัยและตรวจจับสิ่งกีดขวางสำหรับคนตาบอดภาษาไทย
+        หน้าที่: ตรวจสอบสิ่งกีดขวางบนทางเดิน หรือวัตถุอันตราย เช่น บันได, ทางต่างระดับ, ขอบโต๊ะ, ปลั๊กไฟ โดยระบุประเภทและระยะทางโดยประมาณให้กระชับ
+        ตัวอย่าง: เก้าอี้กีดขวางทางเดินด้านหน้าประมาณ 1 เมตร (ความมั่นใจ: สูง)
+    """.trimIndent()
+
+    private val describeSystemPrompt = """
+        บทบาท: คุณคือเพื่อนผู้ช่วยที่จะช่วยอธิบายสภาพแวดล้อมโดยรวมให้คนตาบอดฟังอย่างอบอุ่นและสั้นกระชับ
+        หน้าที่: บรรยายถึงสิ่งแวดล้อมรอบตัว ผู้คน ทิวทัศน์ หรือสถานที่สำคัญในภาพให้ออกมาเป็นประโยคที่เข้าใจง่ายตรงประเด็นและสั้นที่สุด
+    """.trimIndent()
+
+    private val defaultSystemPrompt = """
         บทบาท: คุณคือผู้ช่วยคนตาบอดภาษาไทย ตอบข้อมูลสั้นและตรงประเด็นที่สุด
         รูปแบบคำตอบที่บังคับ: [ชื่อวัตถุ] - [ตำแหน่งโดยประมาณ] (ความมั่นใจ: [ต่ำ/ปานกลาง/สูง])
         ตัวอย่าง: แก้วน้ำ - บนโต๊ะด้านหน้าขวา (ความมั่นใจ: สูง)
@@ -168,12 +206,16 @@ class InferenceEngine(
                 Log.i("InferenceEngine", "LoRA adapter path specified: $loraAdapterPath (Exists=$exists, IsDirectory=$isDir, Files=$files)")
             }
 
-            applyDynamicVisualTokenBudget()
-            try {
-                com.google.ai.edge.litertlm.ExperimentalFlags.visualTokenBudget = 140
-                Log.i("InferenceEngine", "Successfully set ExperimentalFlags.visualTokenBudget = 140")
-            } catch (e: Exception) {
-                Log.w("InferenceEngine", "Failed to set ExperimentalFlags: ${e.message}", e)
+            val visualBudgetSetting = getVisualTokenBudgetSetting()
+            if (visualBudgetSetting == -1) {
+                applyDynamicVisualTokenBudget()
+            } else {
+                try {
+                    com.google.ai.edge.litertlm.ExperimentalFlags.visualTokenBudget = visualBudgetSetting
+                    Log.i("InferenceEngine", "Successfully set ExperimentalFlags.visualTokenBudget = $visualBudgetSetting from settings")
+                } catch (e: Exception) {
+                    Log.w("InferenceEngine", "Failed to set ExperimentalFlags: ${e.message}", e)
+                }
             }
 
             val isEmulator = android.os.Build.HARDWARE.contains("goldfish")
@@ -185,16 +227,18 @@ class InferenceEngine(
             val persistentCacheDir = File(context.filesDir, "litert_shader_cache").apply { mkdirs() }.absolutePath
             Log.i("InferenceEngine", "Is Running on Emulator: $isEmulator")
 
+            val maxTokens = getMaxNumTokensSetting()
+
             if (!isEmulator) {
                 // 1. Try GPU first (recommended for most real devices running VLM)
                 try {
                     Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on GPU...")
-                    Log.i("InferenceEngine", "GPU Config: modelPath=$modelPath, maxNumTokens=512, visionBackend=Backend.CPU(), cacheDir=${context.cacheDir.absolutePath}")
+                    Log.i("InferenceEngine", "GPU Config: modelPath=$modelPath, maxNumTokens=$maxTokens, visionBackend=Backend.CPU(), cacheDir=${context.cacheDir.absolutePath}")
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.GPU(),
                         visionBackend = Backend.CPU(), // Use CPU for vision to prevent Qualcomm GPU delegate crashes
-                        maxNumTokens = 512,
+                        maxNumTokens = maxTokens,
                         cacheDir = persistentCacheDir
                     )
                     val gpuEngine = Engine(config)
@@ -215,12 +259,12 @@ class InferenceEngine(
                 try {
                     val nativeLibDir = context.applicationInfo.nativeLibraryDir
                     Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on NPU...")
-                    Log.i("InferenceEngine", "NPU Config: modelPath=$modelPath, nativeLibraryDir=$nativeLibDir, maxNumTokens=512, cacheDir=${context.cacheDir.absolutePath}")
+                    Log.i("InferenceEngine", "NPU Config: modelPath=$modelPath, nativeLibraryDir=$nativeLibDir, maxNumTokens=$maxTokens, cacheDir=${context.cacheDir.absolutePath}")
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir),
                         visionBackend = Backend.CPU(),
-                        maxNumTokens = 512,
+                        maxNumTokens = maxTokens,
                         cacheDir = persistentCacheDir
                     )
                     val npuEngine = Engine(config)
@@ -243,12 +287,12 @@ class InferenceEngine(
             // 3. Fallback to CPU
             try {
                 Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on CPU...")
-                Log.i("InferenceEngine", "CPU Config: modelPath=$modelPath, maxNumTokens=384, cacheDir=${context.cacheDir.absolutePath}")
+                Log.i("InferenceEngine", "CPU Config: modelPath=$modelPath, maxNumTokens=$maxTokens, cacheDir=${context.cacheDir.absolutePath}")
                 val config = EngineConfig(
                     modelPath = modelPath,
                     backend = Backend.CPU(),
                     visionBackend = Backend.CPU(),
-                    maxNumTokens = 512,
+                    maxNumTokens = maxTokens,
                     cacheDir = persistentCacheDir
                 )
                 val cpuEngine = Engine(config)
@@ -370,10 +414,19 @@ class InferenceEngine(
             val startTime = System.currentTimeMillis()
             var firstTokenTime = 0L
             var tokenCount = 0
-            val fullPrompt = "$systemPrompt\n\nคำสั่ง: $promptText"
+            
+            val selectedSystemPrompt = when {
+                promptText.contains("อ่าน") -> ocrSystemPrompt
+                promptText.contains("กีดขวาง") || promptText.contains("อันตราย") -> obstacleSystemPrompt
+                promptText.contains("อธิบาย") || promptText.contains("สภาพแวดล้อม") -> describeSystemPrompt
+                promptText.contains("ดู") || promptText.contains("สิ่งของ") -> objectSystemPrompt
+                else -> defaultSystemPrompt
+            }
+            val fullPrompt = "$selectedSystemPrompt\n\nคำสั่ง: $promptText"
 
-            // Downscale the image to 224x224 in memory specifically for the VLM model
-            Log.i("InferenceEngine", "Resizing input image to 224x224 for VLM model...")
+            val resolution = getImageResolutionSetting()
+            // Downscale the image to configurable resolution in memory specifically for the VLM model
+            Log.i("InferenceEngine", "Resizing input image to ${resolution}x${resolution} for VLM model...")
             val vlmImageBytes = resizeImageForVlm(imageBytes)
 
             Log.i("InferenceEngine", "Creating conversation session...")
@@ -429,9 +482,10 @@ class InferenceEngine(
     }
 
     private fun resizeImageForVlm(imageBytes: ByteArray): ByteArray {
+        val resolution = getImageResolutionSetting()
         return try {
             val bitmap = android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size) ?: return imageBytes
-            val scaled = Bitmap.createScaledBitmap(bitmap, 224, 224, true)
+            val scaled = Bitmap.createScaledBitmap(bitmap, resolution, resolution, true)
             val out = ByteArrayOutputStream()
             scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
             
@@ -441,7 +495,7 @@ class InferenceEngine(
             bitmap.recycle()
             
             val resized = out.toByteArray()
-            Log.i("InferenceEngine", "Image resized successfully from ${imageBytes.size} to ${resized.size} bytes (224x224).")
+            Log.i("InferenceEngine", "Image resized successfully from ${imageBytes.size} to ${resized.size} bytes (${resolution}x${resolution}).")
             resized
         } catch (e: Exception) {
             Log.w("InferenceEngine", "Failed to resize image for VLM: ${e.message}. Using original bytes.", e)

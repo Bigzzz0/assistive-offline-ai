@@ -892,6 +892,7 @@ class MainActivity : ComponentActivity() {
     // ========================================
     // DEVELOPER PANEL
     // ========================================
+    @kotlin.OptIn(com.google.ai.edge.litertlm.ExperimentalApi::class)
     @Composable
     fun DeveloperPanel() {
         val context = LocalContext.current
@@ -974,6 +975,112 @@ class MainActivity : ComponentActivity() {
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
                         modifier = Modifier.weight(1f).semantics { contentDescription = "ทดสอบสั่น ระดับ 3 อันตราย" }
                     ) { Text("Lv3 อันตราย", fontSize = 10.sp) }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "⚙️ VLM Tuning Controls (ปรับแต่งโทเคนและความละเอียด)",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Max Generation Tokens
+                val prefs = remember { context.getSharedPreferences("vlm_settings", Context.MODE_PRIVATE) }
+                var maxTokens by remember { mutableStateOf(prefs.getInt("max_num_tokens", 512)) }
+                var visualBudget by remember { mutableStateOf(prefs.getInt("visual_token_budget", -1)) }
+                var resolution by remember { mutableStateOf(prefs.getInt("vlm_image_resolution", 224)) }
+
+                Text(
+                    text = "1. Max Output Tokens: $maxTokens (ต้องโหลดโมเดลใหม่จึงจะมีผล)",
+                    color = Color.LightGray,
+                    fontSize = 11.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(128, 256, 512, 1024).forEach { value ->
+                        val isSelected = maxTokens == value
+                        Button(
+                            onClick = {
+                                maxTokens = value
+                                prefs.edit().putInt("max_num_tokens", value).apply()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSelected) Color(0xFF10B981) else Color(0xFF475569)
+                            ),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                            modifier = Modifier.weight(1f).height(32.dp)
+                        ) {
+                            Text(value.toString(), fontSize = 10.sp, color = Color.White)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Visual Token Budget
+                Text(
+                    text = "2. Visual Token Budget: ${if (visualBudget == -1) "Dynamic" else visualBudget.toString()} (ปรับปรุงความฉลาด/การอ่านข้อความ)",
+                    color = Color.LightGray,
+                    fontSize = 11.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(-1, 140, 280, 560, 840).forEach { value ->
+                        val isSelected = visualBudget == value
+                        val label = if (value == -1) "Auto" else value.toString()
+                        Button(
+                            onClick = {
+                                visualBudget = value
+                                prefs.edit().putInt("visual_token_budget", value).apply()
+                                // If engine is initialized, apply immediately
+                                try {
+                                    if (value != -1) {
+                                        com.google.ai.edge.litertlm.ExperimentalFlags.visualTokenBudget = value
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w("MainActivity", "Failed to apply visual token budget immediately: ${e.message}")
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSelected) Color(0xFF10B981) else Color(0xFF475569)
+                            ),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                            modifier = Modifier.weight(1f).height(32.dp)
+                        ) {
+                            Text(label, fontSize = 9.sp, color = Color.White)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // VLM Image Resolution
+                Text(
+                    text = "3. Input Image Resolution: ${resolution}x${resolution} (มีผลทันที / ขนาดใหญ่ช่วยให้อ่านตัวหนังสือชัดขึ้น)",
+                    color = Color.LightGray,
+                    fontSize = 11.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(224, 320, 384, 448).forEach { value ->
+                        val isSelected = resolution == value
+                        Button(
+                            onClick = {
+                                resolution = value
+                                prefs.edit().putInt("vlm_image_resolution", value).apply()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSelected) Color(0xFF10B981) else Color(0xFF475569)
+                            ),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                            modifier = Modifier.weight(1f).height(32.dp)
+                        ) {
+                            Text("${value}px", fontSize = 10.sp, color = Color.White)
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))

@@ -233,9 +233,15 @@ class AssistiveService : Service() {
                 audioPipeline.pauseListening()
 
                 try {
+                    var tokenCount = 0
+                    val maxTokens = inferenceEngine.getMaxNumTokensSetting()
                     inferenceEngine.analyzeImageStream(task.imageBytes, task.prompt).collect { token ->
                         fullResponse.append(token)
                         _inferenceOutput.value = fullResponse.toString()
+                        tokenCount++
+                        val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
+                        val pct = ((tokenCount.toFloat() / maxTokens) * 100).toInt().coerceAtMost(100)
+                        _serviceStatus.value = "กำลังประมวลผลด้วย AI... $pct% ($tokenCount/$maxTokens, ${"%.1f".format(elapsedSec)}s)"
                     }
                 } finally {
                     // Resume ASR listening thread
