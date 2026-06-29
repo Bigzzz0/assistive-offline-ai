@@ -1,6 +1,6 @@
 package com.assistive.system.ai
 
-import android.util.Log
+import com.assistive.system.logging.AppLogger as Log
 import java.util.regex.Pattern
 
 object OcrPostValidator {

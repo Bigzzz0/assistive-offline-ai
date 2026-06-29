@@ -5,7 +5,7 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.util.Log
+import com.assistive.system.logging.AppLogger as Log
 
 class HapticManager(private val context: Context) {
 

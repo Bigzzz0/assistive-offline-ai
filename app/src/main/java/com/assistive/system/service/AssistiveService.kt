@@ -63,6 +63,7 @@ class AssistiveService : Service() {
     private val analysisQueue = java.util.concurrent.ConcurrentLinkedQueue<AnalysisTask>()
     private val MAX_QUEUE_SIZE = 1
     private var isAnalyzing = false
+    private var activeAnalysisJob: kotlinx.coroutines.Job? = null
  
     private val NOTIFICATION_ID = 1001
     private val CHANNEL_ID = "AssistiveServiceChannel"
@@ -150,13 +151,7 @@ class AssistiveService : Service() {
         
         when {
             prompt.contains("หยุด") -> {
-                pendingPromptsQueue.clear()
-                analysisQueue.clear()
-                audioPipeline.stopSpeaking()
-                isAnalyzing = false
-                _currentlyAnalyzingBitmap.value = null
-                audioPipeline.speak("หยุดทำงาน")
-                _serviceStatus.value = "หยุดทำงานชั่วคราว"
+                cancelCurrentAnalysis()
             }
             prompt.contains("อ่าน") -> {
                 enqueuePrompt("อ่านป้ายและข้อความภาษาไทยในภาพ")
@@ -229,9 +224,10 @@ class AssistiveService : Service() {
         _serviceStatus.value = "กำลังประมวลผลด้วย AI..."
         _inferenceOutput.value = ""
 
-        serviceScope.launch {
-            val fullResponse = StringBuilder()
-            val startTime = System.currentTimeMillis()
+        activeAnalysisJob = serviceScope.launch {
+            try {
+                val fullResponse = StringBuilder()
+                val startTime = System.currentTimeMillis()
 
             // Pause microphone listening thread during VLM inference to avoid CPU/thread contention
             audioPipeline.pauseListening()
@@ -273,8 +269,59 @@ class AssistiveService : Service() {
                     _currentlyAnalyzingBitmap.value = null
                     processNextTask()
                 }
+
+                val latencyMs = System.currentTimeMillis() - startTime
+                val tokenCount = fullResponse.split(" ").size
+                performanceMonitor.recordInference(latencyMs, tokenCount)
+                performanceMonitor.refreshMemoryUsage()
+                performanceMonitor.refreshTemperature()
+                performanceMonitor.refreshBatteryDrain()
+
+                val finalOutput = fullResponse.toString()
+                val validatedOutput = if (task.prompt.contains("อ่าน")) {
+                    com.assistive.system.ai.OcrPostValidator.validateOcrResult(finalOutput)
+                } else {
+                    finalOutput
+                }
+
+                _inferenceOutput.value = validatedOutput
+                _serviceStatus.value = "ระบบพร้อมทำงาน (${latencyMs}ms)"
+
+                // Hide the visual loading overlay immediately as the result is ready
+                _currentlyAnalyzingBitmap.value = null
+
+                // Trigger Haptic Feedback based on the VLM output severity
+                triggerResponseHaptics(validatedOutput)
+
+                // Speak the VLM output (non-blocking)
+                audioPipeline.speak(validatedOutput)
+
+            } catch (e: Exception) {
+                Log.e("AssistiveService", "Exception during analysis coroutine: ${e.message}", e)
+                _serviceStatus.value = "เกิดข้อผิดพลาดในการประมวลผล"
+                _currentlyAnalyzingBitmap.value = null
+                audioPipeline.speak("เกิดข้อผิดพลาดในการประมวลผล")
+            } finally {
+                // GUARANTEED to unlock the engine under all circumstances
+                activeAnalysisJob = null
+                isAnalyzing = false
+                _currentlyAnalyzingBitmap.value = null
+                processNextTask()
             }
         }
+    }
+
+    fun cancelCurrentAnalysis() {
+        Log.i("AssistiveService", "cancelCurrentAnalysis: Cancelling active analysis job...")
+        activeAnalysisJob?.cancel()
+        activeAnalysisJob = null
+        isAnalyzing = false
+        _currentlyAnalyzingBitmap.value = null
+        pendingPromptsQueue.clear()
+        analysisQueue.clear()
+        audioPipeline.stopSpeaking()
+        _serviceStatus.value = "ยกเลิกการประมวลผลแล้ว"
+        audioPipeline.speak("ยกเลิกการทำงาน")
     }
 
     private fun triggerResponseHaptics(text: String) {

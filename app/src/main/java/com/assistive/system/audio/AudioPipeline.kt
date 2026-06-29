@@ -9,7 +9,7 @@ import android.media.AudioFocusRequest
 import android.os.Build
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import android.util.Log
+import com.assistive.system.logging.AppLogger as Log
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OfflineStream
@@ -158,7 +158,8 @@ class AudioPipeline(
                 val audioDataBuffer = FloatArray(maxAudioSamples)
                 var audioDataSize = 0
                 var silenceFrames = 0
-                val maxSilenceFrames = 50 // ~1.0 second of silence at 20ms frames
+                val maxSilenceFrames = 40 // ~0.8 second of silence at 20ms frames
+                var isSpeaking = false
                 
                 while (isListening) {
                     if (isPaused) {
@@ -173,52 +174,62 @@ class AudioPipeline(
                     if (readBytes > 0) {
                         val floatBuffer = FloatArray(readBytes) { i -> buffer[i] / 32768.0f }
                         
-                        // Calculate MAE (Mean Absolute Error) to check for silence (avoiding slow sqrt and squaring)
+                        // Calculate MAE (Mean Absolute Error) to check for speech vs silence
                         var sum = 0.0f
                         for (i in 0 until readBytes) {
                             sum += kotlin.math.abs(floatBuffer[i])
                         }
                         val mae = sum / readBytes
                         
-                        if (mae < 0.01f) {
-                            silenceFrames++
-                        } else {
-                            silenceFrames = 0
-                        }
+                        // Speech detection threshold
+                        val isCurrentFrameSpeech = mae >= 0.015f
                         
-                        // Copy to primitive array buffer using System.arraycopy
-                        if (audioDataSize + readBytes <= maxAudioSamples) {
-                            System.arraycopy(floatBuffer, 0, audioDataBuffer, audioDataSize, readBytes)
-                            audioDataSize += readBytes
-                        } else {
-                            audioDataSize = 0
-                            silenceFrames = 0
-                        }
-                        
-                        // If silence detected and we have audio data, decode
-                        if (silenceFrames >= maxSilenceFrames && audioDataSize > 16000) {
-                            val stream = rec.createStream()
-                            val activeSamples = FloatArray(audioDataSize)
-                            System.arraycopy(audioDataBuffer, 0, activeSamples, 0, audioDataSize)
-                            stream.acceptWaveform(activeSamples, sampleRate)
-                            rec.decode(stream)
-                            val text = rec.getResult(stream).text.trim().lowercase()
-                            if (text.isNotEmpty()) {
-                                Log.d("AudioPipeline", "ASR recognized: $text")
-                                // Thai keyword detection — ขยายตาม Proposal Section 5.2
-                                if (matchKeyword(text)) {
-                                    onKeywordDetected(text)
-                                }
+                        if (isCurrentFrameSpeech) {
+                            if (!isSpeaking) {
+                                Log.d("AudioPipeline", "Speech activity detected (mae = ${String.format("%.4f", mae)})")
+                                isSpeaking = true
                             }
-                            stream.release()
-                            audioDataSize = 0
                             silenceFrames = 0
+                        } else {
+                            if (isSpeaking) {
+                                silenceFrames++
+                            }
                         }
                         
-                        // Limit buffer size to prevent memory leak if continuous noise
-                        if (audioDataSize > 16000 * 10) { // Max 10 seconds of audio
-                            audioDataSize = 0
-                            silenceFrames = 0
+                        if (isSpeaking) {
+                            // Accumulate audio samples only when active speech is detected
+                            if (audioDataSize + readBytes <= maxAudioSamples) {
+                                System.arraycopy(floatBuffer, 0, audioDataBuffer, audioDataSize, readBytes)
+                                audioDataSize += readBytes
+                            } else {
+                                // Reset if buffer overflow
+                                audioDataSize = 0
+                                isSpeaking = false
+                                silenceFrames = 0
+                            }
+                            
+                            // If user stops speaking (silence detected for ~0.8s), decode the utterance
+                            if (silenceFrames >= maxSilenceFrames) {
+                                if (audioDataSize > 8000) { // At least 0.5 seconds of audio
+                                    val stream = rec.createStream()
+                                    val activeSamples = FloatArray(audioDataSize)
+                                    System.arraycopy(audioDataBuffer, 0, activeSamples, 0, audioDataSize)
+                                    stream.acceptWaveform(activeSamples, sampleRate)
+                                    rec.decode(stream)
+                                    val text = rec.getResult(stream).text.trim().lowercase()
+                                    if (text.isNotEmpty()) {
+                                        Log.i("AudioPipeline", "ASR recognized: '$text'")
+                                        if (matchKeyword(text)) {
+                                            onKeywordDetected(text)
+                                        }
+                                    }
+                                    stream.release()
+                                }
+                                // Reset for next utterance
+                                audioDataSize = 0
+                                isSpeaking = false
+                                silenceFrames = 0
+                            }
                         }
                     }
                     Thread.sleep(20)
