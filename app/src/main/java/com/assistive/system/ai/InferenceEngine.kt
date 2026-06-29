@@ -222,8 +222,6 @@ class InferenceEngine(
                         visionBackend = Backend.CPU(),
                         maxNumTokens = 512,
                         cacheDir = persistentCacheDir
-                        cacheDir = context.cacheDir.absolutePath
->>>>>>> main
                     )
                     val npuEngine = Engine(config)
                     Log.i("InferenceEngine", "Calling Engine.initialize() on NPU...")
@@ -252,8 +250,6 @@ class InferenceEngine(
                     visionBackend = Backend.CPU(),
                     maxNumTokens = 512,
                     cacheDir = persistentCacheDir
-                    cacheDir = context.cacheDir.absolutePath
->>>>>>> main
                 )
                 val cpuEngine = Engine(config)
                 Log.i("InferenceEngine", "Calling Engine.initialize() on CPU...")
