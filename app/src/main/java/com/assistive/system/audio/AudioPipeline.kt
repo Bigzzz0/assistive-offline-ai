@@ -34,6 +34,7 @@ class AudioPipeline(
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
     private var keywordCallback: ((String) -> Unit)? = null
+    @Volatile private var isPaused = false
 
     // Audio Focus Request for Audio Ducking (API 26+)
     private var focusRequest: AudioFocusRequest? = null
@@ -114,6 +115,16 @@ class AudioPipeline(
         }
     }
 
+    fun pauseListening() {
+        isPaused = true
+        Log.i("AudioPipeline", "ASR Listening paused.")
+    }
+
+    fun resumeListening() {
+        isPaused = false
+        Log.i("AudioPipeline", "ASR Listening resumed.")
+    }
+
     fun startListening(onKeywordDetected: (String) -> Unit) {
         keywordCallback = onKeywordDetected
         if (isListening) return
@@ -150,6 +161,14 @@ class AudioPipeline(
                 val maxSilenceFrames = 50 // ~1.0 second of silence at 20ms frames
                 
                 while (isListening) {
+                    if (isPaused) {
+                        try {
+                            Thread.sleep(100)
+                        } catch (e: Exception) {
+                            // ignore
+                        }
+                        continue
+                    }
                     val readBytes = audioRecord?.read(buffer, 0, buffer.size) ?: -1
                     if (readBytes > 0) {
                         val floatBuffer = FloatArray(readBytes) { i -> buffer[i] / 32768.0f }

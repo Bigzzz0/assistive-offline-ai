@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlin.concurrent.thread
 
 class InferenceEngine(
     private val context: Context,
@@ -50,6 +51,9 @@ class InferenceEngine(
 
     init {
         checkModelAndSetup()
+        if (!isMockMode) {
+            warmOSPageCache(modelPath)
+        }
     }
 
     // ===== Public API =====
@@ -88,18 +92,15 @@ class InferenceEngine(
                 Log.i("InferenceEngine", "LoRA adapter detected at $loraAdapterPath")
             }
 
-            try {
-                com.google.ai.edge.litertlm.ExperimentalFlags.visualTokenBudget = 140
-                Log.i("InferenceEngine", "Enabled ExperimentalFlags.visualTokenBudget = 140")
-            } catch (e: Exception) {
-                Log.w("InferenceEngine", "Failed to set ExperimentalFlags: ${e.message}")
-            }
+            applyDynamicVisualTokenBudget()
 
             val isEmulator = android.os.Build.HARDWARE.contains("goldfish")
                     || android.os.Build.HARDWARE.contains("ranchu")
                     || android.os.Build.PRODUCT.contains("sdk")
                     || android.os.Build.MODEL.contains("Emulator")
                     || android.os.Build.MODEL.contains("google_sdk")
+
+            val persistentCacheDir = File(context.filesDir, "litert_shader_cache").apply { mkdirs() }.absolutePath
 
             if (!isEmulator) {
                 // 1. Try GPU first (recommended for most real devices running VLM)
@@ -108,9 +109,9 @@ class InferenceEngine(
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.GPU(),
-                        visionBackend = Backend.GPU(),
-                        maxNumTokens = 1024,
-                        cacheDir = context.cacheDir.absolutePath
+                        visionBackend = Backend.CPU(),
+                        maxNumTokens = 512,
+                        cacheDir = persistentCacheDir
                     )
                     val gpuEngine = Engine(config)
                     gpuEngine.initialize()
@@ -129,9 +130,9 @@ class InferenceEngine(
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir),
-                        visionBackend = Backend.GPU(),
-                        maxNumTokens = 1024,
-                        cacheDir = context.cacheDir.absolutePath
+                        visionBackend = Backend.CPU(),
+                        maxNumTokens = 512,
+                        cacheDir = persistentCacheDir
                     )
                     val npuEngine = Engine(config)
                     npuEngine.initialize()
@@ -153,9 +154,9 @@ class InferenceEngine(
                 val config = EngineConfig(
                     modelPath = modelPath,
                     backend = Backend.CPU(),
-                    visionBackend = Backend.GPU(),
-                    maxNumTokens = 1024,
-                    cacheDir = context.cacheDir.absolutePath
+                    visionBackend = Backend.CPU(),
+                    maxNumTokens = 512,
+                    cacheDir = persistentCacheDir
                 )
                 val cpuEngine = Engine(config)
                 cpuEngine.initialize()
@@ -169,6 +170,60 @@ class InferenceEngine(
                 isMockMode = true
                 isInitialized = true
                 return@withContext true
+            }
+        }
+    }
+
+    @OptIn(ExperimentalApi::class)
+    private fun applyDynamicVisualTokenBudget() {
+        try {
+            val budget = getAppropriateTokenBudget()
+            com.google.ai.edge.litertlm.ExperimentalFlags.visualTokenBudget = budget
+            Log.i("InferenceEngine", "Set visualTokenBudget dynamically to $budget")
+        } catch (e: Exception) {
+            Log.w("InferenceEngine", "Failed to set dynamic visualTokenBudget: ${e.message}")
+        }
+    }
+
+    private fun getAppropriateTokenBudget(): Int {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+            val thermalStatus = powerManager?.currentThermalStatus ?: 0
+            return when (thermalStatus) {
+                0 -> 840  // Normal/Nominal
+                1 -> 560  // Light
+                2 -> 420  // Moderate
+                3 -> 280  // Severe
+                else -> 140 // Critical/Emergency/Shutdown
+            }
+        }
+        
+        // Fallback: Check battery temperature on older API levels
+        val batteryIntent = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+        val temp = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
+        val tempCelsius = temp / 10
+        return when {
+            tempCelsius < 38 -> 560
+            tempCelsius < 43 -> 280
+            else -> 140
+        }
+    }
+
+    private fun warmOSPageCache(path: String) {
+        thread(priority = Thread.MIN_PRIORITY) {
+            try {
+                val file = File(path)
+                if (file.exists()) {
+                    val buffer = ByteArray(64 * 1024)
+                    file.inputStream().use { input ->
+                        while (input.read(buffer) != -1) {
+                            // Read sequence to pull into OS Page Cache
+                        }
+                    }
+                    Log.i("InferenceEngine", "OS Page Cache warming completed for $path")
+                }
+            } catch (e: Exception) {
+                Log.w("InferenceEngine", "Failed to warm OS Page Cache: ${e.message}")
             }
         }
     }
