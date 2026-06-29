@@ -1,11 +1,12 @@
 package com.assistive.system
 
 import android.app.Application
-import android.util.Log
+import com.assistive.system.logging.AppLogger as Log
 
 class AssistiveApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        Log.i("AssistiveApp", "Application initialized.")
+        Log.init(this)
+        Log.i("AssistiveApp", "Application initialized and AppLogger configured.")
     }
 }

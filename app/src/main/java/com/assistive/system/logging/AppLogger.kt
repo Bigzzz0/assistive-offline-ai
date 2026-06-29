@@ -51,19 +51,40 @@ object AppLogger {
         }
     }
 
-    fun d(tag: String, message: String) {
-        Log.d(tag, message)
-        writeLog("DEBUG", tag, message)
+    fun d(tag: String, message: String, throwable: Throwable? = null) {
+        Log.d(tag, message, throwable)
+        val fullMsg = if (throwable != null) {
+            val sw = StringWriter()
+            throwable.printStackTrace(PrintWriter(sw))
+            "$message\n$sw"
+        } else {
+            message
+        }
+        writeLog("DEBUG", tag, fullMsg)
     }
 
-    fun i(tag: String, message: String) {
-        Log.i(tag, message)
-        writeLog("INFO", tag, message)
+    fun i(tag: String, message: String, throwable: Throwable? = null) {
+        Log.i(tag, message, throwable)
+        val fullMsg = if (throwable != null) {
+            val sw = StringWriter()
+            throwable.printStackTrace(PrintWriter(sw))
+            "$message\n$sw"
+        } else {
+            message
+        }
+        writeLog("INFO", tag, fullMsg)
     }
 
-    fun w(tag: String, message: String) {
-        Log.w(tag, message)
-        writeLog("WARN", tag, message)
+    fun w(tag: String, message: String, throwable: Throwable? = null) {
+        Log.w(tag, message, throwable)
+        val fullMsg = if (throwable != null) {
+            val sw = StringWriter()
+            throwable.printStackTrace(PrintWriter(sw))
+            "$message\n$sw"
+        } else {
+            message
+        }
+        writeLog("WARN", tag, fullMsg)
     }
 
     fun e(tag: String, message: String, throwable: Throwable? = null) {

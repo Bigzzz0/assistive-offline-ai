@@ -1,6 +1,6 @@
 package com.assistive.system.download
 
-import android.util.Log
+import com.assistive.system.logging.AppLogger as Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow

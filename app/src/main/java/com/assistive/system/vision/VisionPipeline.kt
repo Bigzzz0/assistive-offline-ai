@@ -11,7 +11,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.util.Log
+import com.assistive.system.logging.AppLogger as Log
 import androidx.annotation.OptIn
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
@@ -213,14 +213,14 @@ class VisionPipeline(
             bitmap
         }
         
-        // Downscale image to 448x448 to prevent native memory exhaustion in LiteRT vision encoder
-        val scaledBitmap = Bitmap.createScaledBitmap(finalBitmap, 448, 448, true)
+        // Downscale image to 640x640 for sharp UI display and efficient memory usage
+        val scaledBitmap = Bitmap.createScaledBitmap(finalBitmap, 640, 640, true)
         if (scaledBitmap != finalBitmap) {
             finalBitmap.recycle()
         }
         
         val out = ByteArrayOutputStream()
-        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
+        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
         scaledBitmap.recycle()
         return out.toByteArray()
     }
