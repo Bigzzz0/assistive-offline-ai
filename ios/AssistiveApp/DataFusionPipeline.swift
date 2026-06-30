@@ -10,7 +10,7 @@ class DataFusionPipeline {
     private var isProcessing = false
     
     // ใช้คำขอวิเคราะห์ส่วนของวัตถุเด่นในภาพ (Saliency/Objectness) ซึ่งมีใน iOS 13.0+ โดยไม่ต้องโหลด CoreML เพิ่มเติม
-    private let saliencyRequest = VNGenerateObjectnessBasedImageSegmentationsRequest()
+    private let saliencyRequest = VNGenerateObjectnessBasedSaliencyImageRequest()
     
     /// ประมวลผลเฟรม AR เพื่อทำประมวลข้อมูล Fusion ของสิ่งกีดขวางและระยะลึก
     func processFrameForFusion(frame: ARFrame, completion: @escaping (String) -> Void) {
