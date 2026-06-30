@@ -28,42 +28,43 @@ class DataFusionPipeline {
                 
                 var detectedEntities: [String] = []
                 
-                // ตรวจหาวัตถุสูงสุด 3 ชิ้นเพื่อความรวดเร็วและไม่สับสน
-                let targetObservations = observations.prefix(3)
-                
-                for observation in targetObservations {
-                    // Vision boundingBox ใช้ระบบพิกัดด้านล่างซ้าย (0,0) ไปขวาบน (1,1)
-                    let bbox = observation.boundingBox
-                    let label = "วัตถุเบื้องหน้า"
+                if let firstObservation = observations.first,
+                   let salientObjects = firstObservation.salientObjects {
+                    // ตรวจหาวัตถุสูงสุด 3 ชิ้นเพื่อความรวดเร็วและไม่สับสน
+                    let targetObjects = salientObjects.prefix(3)
                     
-                    // คำนวณพิกัดกึ่งกลาง Bounding Box
-                    let centerX = bbox.midX
-                    let centerY = bbox.midY
-                    
-                    // ค้นหาระยะลึกจริงจากแผนที่ความลึก LiDAR
-                    var depth: Float = 0.0
-                    if let sceneDepth = frame.sceneDepth {
-                        depth = self.getDepthAtPoint(pixelBuffer: sceneDepth.depthMap, normalizedX: centerX, normalizedY: centerY)
-                    } else {
-                        // หากไม่มี LiDAR ให้ประเมินจากขนาดของ Bounding Box (เฉลี่ยระยะ)
-                        depth = 1.5 / Float(max(bbox.height, 0.1))
+                    for object in targetObjects {
+                        let bbox = object.boundingBox
+                        let label = "วัตถุเบื้องหน้า"
+                        
+                        // คำนวณพิกัดกึ่งกลาง Bounding Box
+                        let centerX = bbox.midX
+                        let centerY = bbox.midY
+                        
+                        // ค้นหาระยะลึกจริงจากแผนที่ความลึก LiDAR
+                        var depth: Float = 0.0
+                        if let sceneDepth = frame.sceneDepth {
+                            depth = self.getDepthAtPoint(pixelBuffer: sceneDepth.depthMap, normalizedX: centerX, normalizedY: centerY)
+                        } else {
+                            // หากไม่มี LiDAR ให้ประเมินจากขนาดของ Bounding Box (เฉลี่ยระยะ)
+                            depth = 1.5 / Float(max(bbox.height, 0.1))
+                        }
+                        
+                        // ข้ามกรณีตรวจจับผิดพลาดหรือระยะไกลเกินไป (เกิน 5 เมตร)
+                        if depth < 0.1 || depth > 5.0 { continue }
+                        
+                        // แปลงพิกัดแกนนอน X เป็นคำบอกทิศทางตามหน้าปัดกล้อง
+                        let direction: String
+                        if centerX < 0.35 {
+                            direction = "อยู่ทางซ้าย"
+                        } else if centerX > 0.65 {
+                            direction = "อยู่ทางขวา"
+                        } else {
+                            direction = "อยู่ตรงกลางข้างหน้า"
+                        }
+                        
+                        detectedEntities.append(String(format: "พบ %@ ระยะ %.1f เมตร %@", label, depth, direction))
                     }
-                    
-                    // ข้ามกรณีตรวจจับผิดพลาดหรือระยะไกลเกินไป (เกิน 5 เมตร)
-                    if depth < 0.1 || depth > 5.0 { continue }
-                    
-                    // แปลงพิกัดแกนนอน X เป็นคำบอกทิศทางตามหน้าปัดกล้อง
-                    let direction: String
-                    if centerX < 0.35 {
-                        direction = "อยู่ทางซ้าย"
-                    } else if centerX > 0.65 {
-                        direction = "อยู่ทางขวา"
-                    } else {
-                        direction = "อยู่ตรงกลางข้างหน้า"
-                    }
-                    
-                    let alertTag = depth < 1.2 ? "(อันตราย)" : "(แจ้งเตือน)"
-                    detectedEntities.append(String(format: "พบ %@ ระยะ %.1f เมตร %@", label, depth, direction))
                 }
                 
                 let rawText: String
