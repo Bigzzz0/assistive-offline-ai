@@ -23,6 +23,18 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
     private var targetVolume: Float = 0.0
     private var pulseTimer: Timer?
     
+    private(set) var isBeepAlertMuted: Bool = {
+        return UserDefaults.standard.bool(forKey: "isBeepAlertMuted")
+    }()
+    
+    func setBeepAlertMuted(_ muted: Bool) {
+        self.isBeepAlertMuted = muted
+        UserDefaults.standard.set(muted, forKey: "isBeepAlertMuted")
+        if muted {
+            stopTone()
+        }
+    }
+    
     override init() {
         super.init()
         speechSynthesizer.delegate = self
@@ -138,6 +150,11 @@ class AudioPipeline: NSObject, AVSpeechSynthesizerDelegate {
             
             if let pos = position, let node = self.toneSourceNode {
                 node.position = AVAudio3DPoint(x: pos.x, y: pos.y, z: pos.z)
+            }
+            
+            if self.isBeepAlertMuted {
+                self.stopTone()
+                return
             }
             
             self.setToneFrequency(freq, volume: vol)

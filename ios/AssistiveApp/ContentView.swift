@@ -8,6 +8,7 @@ enum ActiveMode: String, CaseIterable {
     case pointAndSpeak = "👉 ชี้แล้วอ่าน"
     case peopleDetection = "👤 เตือนระยะคน"
     case roomPlan = "🪑 ค้นหาเก้าอี้และประตู"
+    case lidarMeasure = "📏 วัดระยะวัตถุ (LiDAR)"
     
     var command: String {
         switch self {
@@ -17,6 +18,7 @@ enum ActiveMode: String, CaseIterable {
         case .pointAndSpeak: return "ชี้"
         case .peopleDetection: return "คน"
         case .roomPlan: return "สแกนห้อง"
+        case .lidarMeasure: return "ระยะ"
         }
     }
     
@@ -28,6 +30,7 @@ enum ActiveMode: String, CaseIterable {
         case .pointAndSpeak: return "โหมดชี้แล้วอ่าน"
         case .peopleDetection: return "โหมดเตือนระยะคน"
         case .roomPlan: return "โหมดค้นหาเก้าอี้และประตู"
+        case .lidarMeasure: return "โหมดวัดระยะวัตถุด้วยไลดาร์"
         }
     }
     
@@ -39,6 +42,7 @@ enum ActiveMode: String, CaseIterable {
         case .pointAndSpeak: return Color(red: 0.75, green: 0.35, blue: 0.95) // Orchid Purple
         case .peopleDetection: return Color(red: 1.0, green: 0.22, blue: 0.37) // Neon Rose Pink
         case .roomPlan: return Color(red: 0.19, green: 0.84, blue: 0.78) // Aqua Teal
+        case .lidarMeasure: return Color(red: 0.95, green: 0.5, blue: 0.15) // Bright Orange
         }
     }
     
@@ -70,6 +74,9 @@ struct ContentView: View {
     @State private var qaText: String = ""
     @State private var hasCapturedImage: Bool = false
     @State private var speechRateState: Float = AudioPipeline.shared.speechRate
+    @State private var isBeepAlertMuted: Bool = AudioPipeline.shared.isBeepAlertMuted
+    @State private var isBlackScreenMode: Bool = false
+    @ObservedObject private var speechInputManager = SpeechInputManager.shared
     
     @Environment(\.dynamicTypeSize) private var sizeCategory
     
@@ -236,8 +243,19 @@ struct ContentView: View {
     private var cameraViewport: some View {
         ZStack {
             if cameraAuthorized {
-                if currentMode == .peopleDetection, let arSession = ARDepthPipeline.shared.session {
-                    ARPreviewView(session: arSession)
+                if (currentMode == .peopleDetection || currentMode == .lidarMeasure || currentMode == .object || currentMode == .obstacle), let arSession = ARDepthPipeline.shared.session {
+                    ZStack {
+                        ARPreviewView(session: arSession)
+                        if currentMode == .lidarMeasure {
+                            Circle()
+                                .stroke(Color.white, lineWidth: 2.5)
+                                .frame(width: 40, height: 40)
+                                .shadow(color: .black.opacity(0.5), radius: 3)
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 8, height: 8)
+                        }
+                    }
                 } else if currentMode == .roomPlan, let roomSession = RoomPlanManager.shared.session {
                     #if canImport(RoomPlan)
                     ARPreviewView(session: roomSession.arSession)
@@ -436,6 +454,47 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
                     .background(RoundedRectangle(cornerRadius: 8).stroke(Color.blue, lineWidth: 1))
             }
+        }
+    }
+    
+    private var userSettingsToggles: some View {
+        HStack(spacing: 8) {
+            Button(action: {
+                isBeepAlertMuted.toggle()
+                AudioPipeline.shared.setBeepAlertMuted(isBeepAlertMuted)
+                vibrateHaptic(level: 1)
+                speakText(isBeepAlertMuted ? "ปิดเสียงปิ๊ปเตือนระยะ" : "เปิดเสียงปิ๊ปเตือนระยะ")
+            }) {
+                HStack {
+                    Image(systemName: isBeepAlertMuted ? "speaker.slash.fill" : "speaker.wave.3.fill")
+                    Text(isBeepAlertMuted ? "ปิดเสียงปิ๊ป" : "เปิดเสียงปิ๊ป")
+                        .font(.system(.footnote, design: .default, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(isBeepAlertMuted ? Color.red.opacity(0.6) : Color.green.opacity(0.6))
+                .cornerRadius(8)
+            }
+            .accessibilityLabel(isBeepAlertMuted ? "เปิดเสียงเตือนปิ๊ป" : "ปิดเสียงเตือนปิ๊ป")
+            
+            Button(action: {
+                isBlackScreenMode.toggle()
+                vibrateHaptic(level: 1)
+                speakText(isBlackScreenMode ? "เปิดโหมดไร้หน้าจอ แตะสองครั้งที่หน้าจอเพื่อออก" : "ปิดโหมดไร้หน้าจอ")
+            }) {
+                HStack {
+                    Image(systemName: isBlackScreenMode ? "eye.slash.fill" : "eye.fill")
+                    Text(isBlackScreenMode ? "จอหลังสีดำ" : "จอปกติ")
+                        .font(.system(.footnote, design: .default, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(Color.blue.opacity(0.6))
+                .cornerRadius(8)
+            }
+            .accessibilityLabel("สลับโหมดหน้าจอสีดำ")
         }
     }
     
@@ -682,35 +741,60 @@ struct ContentView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                headerView
-                activeModeBannerAndSpeedRow
-                cameraViewport
-                statusAndOutputViews
-                actionButtons
-                devAndModelToggles
-                modelManagerPanel
-                performancePanel
-                debugConsolePanel
+        ZStack {
+            ScrollView {
+                VStack(spacing: 16) {
+                    headerView
+                    activeModeBannerAndSpeedRow
+                    userSettingsToggles
+                    cameraViewport
+                    statusAndOutputViews
+                    actionButtons
+                    devAndModelToggles
+                    modelManagerPanel
+                    performancePanel
+                    debugConsolePanel
+                }
+                .padding()
             }
-            .padding()
-        }
-        .background(
-            LinearGradient(
-                gradient: Gradient(colors: [Color(red: 0.02, green: 0.03, blue: 0.05), Color(red: 0.05, green: 0.07, blue: 0.12)]),
-                startPoint: .top,
-                endPoint: .bottom
+            .background(
+                LinearGradient(
+                    gradient: Gradient(colors: [Color(red: 0.02, green: 0.03, blue: 0.05), Color(red: 0.05, green: 0.07, blue: 0.12)]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .edgesIgnoringSafeArea(.all)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    triggerCommand(currentMode.command)
+                }
+                .onTapGesture(count: 1) {
+                    announceMode()
+                }
             )
-            .edgesIgnoringSafeArea(.all)
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2) {
-                triggerCommand(currentMode.command)
+            
+            if isBlackScreenMode {
+                Color.black
+                    .edgesIgnoringSafeArea(.all)
+                    .overlay(
+                        VStack(spacing: 12) {
+                            Text("โหมดไร้หน้าจอ (ประหยัดพลังงาน)")
+                                .font(.system(.title3, design: .default, weight: .bold))
+                                .foregroundColor(.gray)
+                            Text("แตะสองครั้งเพื่อออกจากโหมดสีดำ")
+                                .font(.system(.body))
+                                .foregroundColor(.gray)
+                        }
+                    )
+                    .onTapGesture(count: 2) {
+                        isBlackScreenMode = false
+                        speakText("ออกจากโหมดไร้หน้าจอ")
+                        vibrateHaptic(level: 1)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("เปิดโหมดไร้หน้าจออยู่ แตะสองครั้งที่ส่วนใดก็ได้เพื่อปิด")
             }
-            .onTapGesture(count: 1) {
-                announceMode()
-            }
-        )
+        }
         .gesture(
             DragGesture().onEnded { value in
                 guard Date().timeIntervalSince(lastModeChangeTime) >= modeSwitchCooldown else { return }
@@ -810,12 +894,93 @@ struct ContentView: View {
             self.cpuTempCelsius = PerformanceMonitor.shared.getTemperatureCelsius()
             self.batteryDrain = PerformanceMonitor.shared.getBatteryDrainMahPerMin()
         }
-        .alert("ถามเกี่ยวกับภาพล่าสุด", isPresented: $showQADialog) {
-            TextField("ตัวอย่าง: แก้วน้ำอยู่ข้างกุญแจไหม", text: $qaText)
-            Button("ตกลง", action: submitQAPrompt)
-            Button("ยกเลิก", role: .cancel, action: {})
-        } message: {
-            Text("พิมพ์คำถามที่คุณอยากรู้เกี่ยวกับรูปภาพล่าสุด")
+        .sheet(isPresented: $showQADialog) {
+            VStack(spacing: 20) {
+                Text("ถามตอบเกี่ยวกับภาพล่าสุด (Q&A)")
+                    .font(.system(.headline, design: .default, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(.top)
+                
+                TextField("พิมพ์คำถามของคุณที่นี่...", text: $qaText)
+                    .padding()
+                    .background(Color.white.opacity(0.1))
+                    .cornerRadius(10)
+                    .foregroundColor(.white)
+                    .accessibilityLabel("ช่องกรอกคำถาม")
+                
+                if speechInputManager.isRecording {
+                    Text(speechInputManager.statusMessage)
+                        .foregroundColor(.yellow)
+                        .font(.system(.footnote, design: .default, weight: .semibold))
+                        .accessibilityLabel(speechInputManager.statusMessage)
+                }
+                
+                HStack(spacing: 16) {
+                    // ปุ่มไมค์ พูดเพื่อถามคำถาม
+                    Button(action: {
+                        if speechInputManager.isRecording {
+                            speechInputManager.stopListening()
+                        } else {
+                            vibrateHaptic(level: 1)
+                            speechInputManager.startListening(onTranscription: { text in
+                                self.qaText = text
+                            }) { errorText, error in
+                                if let error = error {
+                                    self.speakText("เกิดข้อผิดพลาดในการฟังเสียง: \(error.localizedDescription)")
+                                }
+                            }
+                        }
+                    }) {
+                        HStack {
+                            Image(systemName: speechInputManager.isRecording ? "stop.circle.fill" : "mic.fill")
+                            Text(speechInputManager.isRecording ? "หยุดฟัง" : "พูดถามคำถาม")
+                                .font(.system(.body, design: .default, weight: .bold))
+                        }
+                        .foregroundColor(.white)
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(speechInputManager.isRecording ? Color.red : Color.blue)
+                        .cornerRadius(12)
+                    }
+                    .accessibilityLabel(speechInputManager.isRecording ? "ปุ่มหยุดฟังเสียง" : "ปุ่มพูดถามคำถามภาษาไทย")
+                    
+                    // ปุ่มส่งคำถาม
+                    Button(action: {
+                        speechInputManager.stopListening()
+                        showQADialog = false
+                        submitQAPrompt()
+                    }) {
+                        Text("ส่งคำถาม")
+                            .font(.system(.body, design: .default, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding()
+                            .frame(maxWidth: .infinity)
+                            .background(Color.green)
+                            .cornerRadius(12)
+                    }
+                    .accessibilityLabel("ปุ่มส่งคำถามวิเคราะห์")
+                }
+                
+                Button(action: {
+                    speechInputManager.stopListening()
+                    showQADialog = false
+                }) {
+                    Text("ยกเลิก")
+                        .font(.system(.body, design: .default, weight: .semibold))
+                        .foregroundColor(.gray)
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(Color.white.opacity(0.05))
+                        .cornerRadius(12)
+                }
+                .accessibilityLabel("ปุ่มยกเลิกการถามคำถาม")
+            }
+            .padding()
+            .presentationDetents([.medium, .large])
+            .background(
+                Color(red: 0.02, green: 0.03, blue: 0.05)
+                    .edgesIgnoringSafeArea(.all)
+            )
         }
     }
     
@@ -873,6 +1038,19 @@ struct ContentView: View {
             return
         }
         
+        if command == "ระยะ" {
+            vibrateHaptic(level: 1)
+            if let frame = ARDepthPipeline.shared.session?.currentFrame,
+               let depth = ARDepthPipeline.shared.getCenterDepth(frame: frame) {
+                let speechText = String(format: "วัตถุตรงหน้าห่าง %.1f เมตรค่ะ", depth)
+                speakText(speechText)
+                aiResultText = speechText
+            } else {
+                speakText("ไม่สามารถวัดระยะทางตรงกลางหน้าจอได้ในขณะนี้ค่ะ")
+            }
+            return
+        }
+        
         guard !isProcessing else { return }
         
         // If VLM mode is triggered, but model is still loading in the background
@@ -897,10 +1075,8 @@ struct ContentView: View {
         
         let startTime = Date()
         
-        // Capture current frame from the live camera
-        VisionPipeline.shared.captureCurrentFrame { jpegData in
+        let captureCompletion: (Data?) -> Void = { jpegData in
             guard let jpegData = jpegData else {
-                // No camera data — use mock
                 self.statusText = "ไม่สามารถจับภาพจากกล้องได้"
                 self.aiResultText = "กรุณาอนุญาตการใช้กล้องและลองอีกครั้ง"
                 self.speakText(self.aiResultText)
@@ -909,7 +1085,6 @@ struct ContentView: View {
                 return
             }
             
-            // Route to InferenceEngine (real OCR for read mode, simulated for others)
             InferenceEngine.shared.analyzeImage(jpegData: jpegData, promptText: command, onToken: { _ in }) { result in
                 let elapsed = Int(Date().timeIntervalSince(startTime) * 1000)
                 self.lastLatencyMs = elapsed
@@ -923,10 +1098,22 @@ struct ContentView: View {
                 self.hasCapturedImage = true
             }
         }
+        
+        if ARDepthPipeline.shared.isActive, let frame = ARDepthPipeline.shared.session?.currentFrame {
+            let jpegData = VisionPipeline.shared.convertToJpeg(pixelBuffer: frame.capturedImage)
+            captureCompletion(jpegData)
+        } else {
+            VisionPipeline.shared.captureCurrentFrame(completion: captureCompletion)
+        }
     }
     
     private func handleModeChange(to newMode: ActiveMode) {
         VisionPipeline.shared.activeMode = newMode
+        
+        // Purge resources if switching away from VLM modes to prevent OOM
+        if newMode != .object && newMode != .obstacle {
+            InferenceEngine.shared.purgeResources()
+        }
         
         // Stop any running special sessions
         ARDepthPipeline.shared.stopSession()
@@ -953,7 +1140,7 @@ struct ContentView: View {
             speakText("ระบบปฏิบัติการนี้ไม่รองรับรูมแพลน สลับเป็นโหมดจำลองสิ่งกีดขวาง")
             aiResultText = "ไม่รองรับ RoomPlan ในเวอร์ชันนี้ จะทำงานในโหมดจำลองสิ่งกีดขวางแบบออฟไลน์"
             #endif
-        } else if newMode == .peopleDetection {
+        } else if newMode == .peopleDetection || newMode == .lidarMeasure || newMode == .object || newMode == .obstacle {
             VisionPipeline.shared.stopSession()
             ARDepthPipeline.shared.startSession()
         } else {

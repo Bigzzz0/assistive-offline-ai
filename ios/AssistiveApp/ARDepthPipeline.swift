@@ -119,8 +119,41 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         isProcessing = true
         lastProcessedTime = now
         
-        let pixelBuffer = frame.capturedImage
+        let mode = VisionPipeline.shared.activeMode
         
+        if mode == .lidarMeasure {
+            // โหมดวัดระยะวัตถุกึ่งกลางด้วย LiDAR
+            if let depth = getCenterDepth(frame: frame) {
+                let status = String(format: "ระยะทางตรงกลาง: %.2f เมตร", depth)
+                let userInfo: [AnyHashable: Any] = [
+                    "aiResult": status,
+                    "status": "วัดระยะเรียลไทม์"
+                ]
+                NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
+            } else {
+                let userInfo: [AnyHashable: Any] = [
+                    "aiResult": "ระยะทาง: ไม่สามารถวัดได้",
+                    "status": "วัดระยะเรียลไทม์"
+                ]
+                NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
+            }
+            self.isProcessing = false
+            return
+        } else if mode == .object || mode == .obstacle {
+            // โหมดสแกนด่วน Data Fusion (ประสาน Vision + LiDAR)
+            DataFusionPipeline.shared.processFrameForFusion(frame: frame) { result in
+                let userInfo: [AnyHashable: Any] = [
+                    "aiResult": result,
+                    "status": "สแกนด่วน Real-time"
+                ]
+                NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
+                self.isProcessing = false
+            }
+            return
+        }
+        
+        // โหมดเตือนระยะคน (peopleDetection)
+        let pixelBuffer = frame.capturedImage
         let personRequest = VNDetectHumanRectanglesRequest()
         let orientation = getCGImageOrientation()
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
@@ -252,5 +285,55 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         let pointInWorld = camera.transform * simd_make_float4(pointInCamera, 1.0)
         
         return simd_make_float3(pointInWorld.x, pointInWorld.y, pointInWorld.z)
+    }
+    
+    /// อ่านค่าความลึก (เมตร) ณ จุดกึ่งกลางหน้าจอ
+    func getCenterDepth(frame: ARFrame) -> Float? {
+        guard let sceneDepth = frame.sceneDepth else { return nil }
+        let depthMap = sceneDepth.depthMap
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+        
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+        
+        let x = width / 2
+        let y = height / 2
+        
+        let baseAddress = CVPixelBufferGetBaseAddress(depthMap)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
+        let rowData = baseAddress?.advanced(by: y * bytesPerRow)
+        let depthPointer = rowData?.assumingMemoryBound(to: Float32.self)
+        
+        let rawDepth = depthPointer?[x] ?? 0.0
+        return (rawDepth.isNaN || rawDepth.isInfinite || rawDepth < 0.1) ? nil : rawDepth
+    }
+    
+    /// วิเคราะห์กริดความลึก 3x3
+    func getCoarseGridDepth(frame: ARFrame) -> [Float] {
+        guard let sceneDepth = frame.sceneDepth else { return [] }
+        let depthMap = sceneDepth.depthMap
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+        
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+        
+        let baseAddress = CVPixelBufferGetBaseAddress(depthMap)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
+        
+        var gridDepths: [Float] = []
+        let xCoords = [width / 4, width / 2, 3 * width / 4]
+        let yCoords = [height / 4, height / 2, 3 * height / 4]
+        
+        for y in yCoords {
+            let rowData = baseAddress?.advanced(by: y * bytesPerRow)
+            let depthPointer = rowData?.assumingMemoryBound(to: Float32.self)
+            for x in xCoords {
+                let d = depthPointer?[x] ?? 0.0
+                gridDepths.append(d.isNaN ? 0.0 : d)
+            }
+        }
+        return gridDepths
     }
 }

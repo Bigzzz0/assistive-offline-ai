@@ -210,8 +210,10 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         
         if beepInterval > 0.0 && (now - lastBeepTime >= beepInterval) {
             lastBeepTime = now
-            // System sound ID 1104 is a gentle Tink sound
-            AudioServicesPlaySystemSound(1104)
+            if !AudioPipeline.shared.isBeepAlertMuted {
+                // System sound ID 1104 is a gentle Tink sound
+                AudioServicesPlaySystemSound(1104)
+            }
         }
         
         // Post notification about finger distance and hovered text
@@ -243,7 +245,7 @@ class VisionPipeline: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         return sqrt(dx*dx + dy*dy)
     }
     
-    private func convertToJpeg(pixelBuffer: CVPixelBuffer) -> Data? {
+    func convertToJpeg(pixelBuffer: CVPixelBuffer) -> Data? {
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         let context = CIContext()
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }

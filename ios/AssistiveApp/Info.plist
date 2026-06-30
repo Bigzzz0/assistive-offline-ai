@@ -20,6 +20,8 @@
 	<string>ระบบจำเป็นต้องใช้กล้องในการวิเคราะห์ภาพถ่ายของสภาพแวดล้อมเพื่อรายงานผู้บกพร่องทางการมองเห็น</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>ระบบจำเป็นต้องใช้ไมโครโฟนในการฟังคำสั่งเสียงของผู้งานในการสลับโหมดและเริ่มวิเคราะห์</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>แอปพลิเคชันต้องการวิเคราะห์เสียงพูดของคุณเพื่อเปลี่ยนเป็นข้อความคำถาม</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIRequiredDeviceCapabilities</key>

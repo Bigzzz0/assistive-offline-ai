@@ -514,4 +514,71 @@ class InferenceEngine {
             }
         }
     }
+    
+    /// สั่งยกเลิกเอนจินและคืนหน่วยความจำแรมทั้งหมดเพื่อความปลอดภัย (RAM Purging)
+    func purgeResources() {
+        LogStore.shared.log("[InferenceEngine] Purging VLM resources to free RAM...")
+        self.conversation = nil
+        self.engine = nil
+        self.isInitialized = false
+        self.isMockMode = true
+        
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: NSNotification.Name("InferenceEngineStateDidChange"), object: nil)
+        }
+    }
+    
+    /// รันโมเดล Gemma เฉพาะส่วนข้อความ (Text-only) เพื่อประมวลผลสรุปข้อมูลกายภาพด่วน
+    func analyzeFusedData(rawText: String, onToken: @escaping (String) -> Void, completion: @escaping (String) -> Void) {
+        if !isMockMode, let engine = self.engine {
+            LogStore.shared.log("[InferenceEngine] Running Gemma Text-only on fused data...")
+            Task.detached(priority: .userInitiated) { [weak self] in
+                guard let self = self else { return }
+                do {
+                    let localConversation = try await engine.createConversation()
+                    let prompt = "บทบาท: คุณคือผู้ช่วยคนตาบอดภาษาไทย จงนำข้อมูลสรุปสภาพแวดล้อมดิบต่อไปนี้มาประมวลผลและเรียบเรียงเป็นคำพูดภาษาไทยสั้นๆ ที่เข้าใจง่ายในการนำทางและเตือนอันตราย โดยหากพบสิ่งกีดขวางในระยะอันตราย (ต่ำกว่า 1.2 เมตร) ให้ขึ้นต้นด้วยคำว่าระวัง\n\nข้อมูลดิบ: \(rawText)"
+                    
+                    let message = Message(contents: [Content.text(prompt)])
+                    var accumulatedText = ""
+                    
+                    for try await chunk in localConversation.sendMessageStream(message) {
+                        let textChunk = chunk.toString
+                        accumulatedText += textChunk
+                        DispatchQueue.main.async {
+                            onToken(textChunk)
+                        }
+                    }
+                    
+                    DispatchQueue.main.async {
+                        completion(accumulatedText)
+                    }
+                } catch {
+                    LogStore.shared.log("[InferenceEngine] Text-only inference error: \(error.localizedDescription). Falling back to heuristic...")
+                    DispatchQueue.main.async {
+                        let fallbackText = self.fallbackFriendText(rawText: rawText)
+                        completion(fallbackText)
+                    }
+                }
+            }
+        } else {
+            let fallbackText = self.fallbackFriendText(rawText: rawText)
+            onToken(fallbackText)
+            completion(fallbackText)
+        }
+    }
+    
+    private func fallbackFriendText(rawText: String) -> String {
+        var clean = rawText.replacingOccurrences(of: "สภาพแวดล้อมเบื้องหน้า: ", with: "")
+        if clean.contains("ทางสะดวก") {
+            return "ทางสะดวก ไม่มีสิ่งกีดขวางเด่นชัดค่ะ"
+        }
+        
+        clean = clean.replacingOccurrences(of: "พบ วัตถุเบื้องหน้า", with: "มีวัตถุ")
+        clean = clean.replacingOccurrences(of: "พบ สิ่งกีดขวาง", with: "มีสิ่งกีดขวาง")
+        clean = clean.replacingOccurrences(of: "ระยะ ", with: "ห่าง ")
+        clean = clean.replacingOccurrences(of: " (อันตราย)", with: " แนะนำให้ระมัดระวังค่ะ")
+        clean = clean.replacingOccurrences(of: " (แจ้งเตือน)", with: "")
+        
+        return "ตรวจพบ สภาพแวดล้อมดังนี้ค่ะ \(clean)"
+    }
 }
