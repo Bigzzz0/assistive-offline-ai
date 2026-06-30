@@ -213,8 +213,12 @@ class VisionPipeline(
             bitmap
         }
         
-        // Downscale image to 640x640 for sharp UI display and efficient memory usage
-        val scaledBitmap = Bitmap.createScaledBitmap(finalBitmap, 640, 640, true)
+        // Downscale image to target resolution directly to avoid double JNI resizing overhead in InferenceEngine
+        val prefs = context.getSharedPreferences("vlm_settings", Context.MODE_PRIVATE)
+        val resolution = prefs.getInt("vlm_image_resolution", 224)
+        
+        Log.d("VisionPipeline", "Scaling camera frame to target VLM resolution: ${resolution}x${resolution}")
+        val scaledBitmap = Bitmap.createScaledBitmap(finalBitmap, resolution, resolution, true)
         if (scaledBitmap != finalBitmap) {
             finalBitmap.recycle()
         }

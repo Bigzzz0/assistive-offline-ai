@@ -229,45 +229,17 @@ class AssistiveService : Service() {
                 val fullResponse = StringBuilder()
                 val startTime = System.currentTimeMillis()
 
-            // Pause microphone listening thread during VLM inference to avoid CPU/thread contention
-            audioPipeline.pauseListening()
+                // Pause microphone listening thread during VLM inference to avoid CPU/thread contention
+                audioPipeline.pauseListening()
 
-            try {
-                inferenceEngine.analyzeImageStream(task.imageBytes, task.prompt).collect { token ->
-                    fullResponse.append(token)
-                    _inferenceOutput.value = fullResponse.toString()
-                }
-            } finally {
-                // Resume ASR listening thread
-                audioPipeline.resumeListening()
-            }
-
-            val latencyMs = System.currentTimeMillis() - startTime
-            val tokenCount = fullResponse.split(" ").size
-            performanceMonitor.recordInference(latencyMs, tokenCount)
-            performanceMonitor.refreshMemoryUsage()
-            performanceMonitor.refreshTemperature()
-            performanceMonitor.refreshBatteryDrain()
-
-            val finalOutput = fullResponse.toString()
-            val validatedOutput = if (task.prompt.contains("อ่าน")) {
-                com.assistive.system.ai.OcrPostValidator.validateOcrResult(finalOutput)
-            } else {
-                finalOutput
-            }
-
-            _inferenceOutput.value = validatedOutput
-            _serviceStatus.value = "ระบบพร้อมทำงาน (${latencyMs}ms)"
-
-            // Trigger Haptic Feedback based on the VLM output severity
-            triggerResponseHaptics(validatedOutput)
-
-            // Speak the VLM output
-            audioPipeline.speak(validatedOutput) {
-                serviceScope.launch {
-                    isAnalyzing = false
-                    _currentlyAnalyzingBitmap.value = null
-                    processNextTask()
+                try {
+                    inferenceEngine.analyzeImageStream(task.imageBytes, task.prompt).collect { token ->
+                        fullResponse.append(token)
+                        _inferenceOutput.value = fullResponse.toString()
+                    }
+                } finally {
+                    // Resume ASR listening thread
+                    audioPipeline.resumeListening()
                 }
 
                 val latencyMs = System.currentTimeMillis() - startTime

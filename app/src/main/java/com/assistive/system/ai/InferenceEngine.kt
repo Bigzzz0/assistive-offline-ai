@@ -9,6 +9,8 @@ import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.ExperimentalApi
+import com.google.ai.edge.litertlm.ConversationConfig
+import com.google.ai.edge.litertlm.LoraConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -233,11 +235,11 @@ class InferenceEngine(
                 // 1. Try GPU first (recommended for most real devices running VLM)
                 try {
                     Log.i("InferenceEngine", "Attempting LiteRT-LM Engine initialization on GPU...")
-                    Log.i("InferenceEngine", "GPU Config: modelPath=$modelPath, maxNumTokens=$maxTokens, visionBackend=Backend.CPU(), cacheDir=${context.cacheDir.absolutePath}")
+                    Log.i("InferenceEngine", "GPU Config: modelPath=$modelPath, maxNumTokens=$maxTokens, visionBackend=Backend.GPU(), cacheDir=${context.cacheDir.absolutePath}")
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.GPU(),
-                        visionBackend = Backend.CPU(), // Use CPU for vision to prevent Qualcomm GPU delegate crashes
+                        visionBackend = Backend.GPU(), // Enable GPU vision acceleration
                         maxNumTokens = maxTokens,
                         cacheDir = persistentCacheDir
                     )
@@ -263,7 +265,7 @@ class InferenceEngine(
                     val config = EngineConfig(
                         modelPath = modelPath,
                         backend = Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir),
-                        visionBackend = Backend.CPU(),
+                        visionBackend = Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir), // Enable NPU vision acceleration
                         maxNumTokens = maxTokens,
                         cacheDir = persistentCacheDir
                     )
@@ -429,8 +431,17 @@ class InferenceEngine(
             Log.i("InferenceEngine", "Resizing input image to ${resolution}x${resolution} for VLM model...")
             val vlmImageBytes = resizeImageForVlm(imageBytes)
 
-            Log.i("InferenceEngine", "Creating conversation session...")
-            currentEngine.createConversation().use { conversation ->
+            val loraConfig = if (loraAdapterPath != null && File(loraAdapterPath).exists()) {
+                Log.i("InferenceEngine", "Applying custom LoRA adapter from: $loraAdapterPath")
+                LoraConfig(loraPath = loraAdapterPath)
+            } else {
+                null
+            }
+            val conversationConfig = ConversationConfig(
+                loraConfig = loraConfig
+            )
+            Log.i("InferenceEngine", "Creating conversation session with config (lora=${loraConfig != null})...")
+            currentEngine.createConversation(conversationConfig).use { conversation ->
                 Log.i("InferenceEngine", "Sending message with prompt length: ${fullPrompt.length} chars, image size: ${vlmImageBytes.size} bytes...")
                 val contents = Contents.of(listOf(
                     Content.ImageBytes(vlmImageBytes),
@@ -485,6 +496,11 @@ class InferenceEngine(
         val resolution = getImageResolutionSetting()
         return try {
             val bitmap = android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size) ?: return imageBytes
+            if (bitmap.width == resolution && bitmap.height == resolution) {
+                bitmap.recycle()
+                Log.i("InferenceEngine", "Image is already at target resolution ($resolution x $resolution). Skipping resizing.")
+                return imageBytes
+            }
             val scaled = Bitmap.createScaledBitmap(bitmap, resolution, resolution, true)
             val out = ByteArrayOutputStream()
             scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
