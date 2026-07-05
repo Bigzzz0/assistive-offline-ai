@@ -44,6 +44,7 @@ class ObjectDetector(private val context: Context) {
     private var gpuDelegate: GpuDelegate? = null
     private var nnApiDelegate: NnApiDelegate? = null
     private var isInitialized = false
+    private var outputArray: Array<Array<FloatArray>>? = null
 
     // COCO 80-class label → Thai name mapping (for TTS)
     private val thaiLabels = mapOf(
@@ -114,6 +115,9 @@ class ObjectDetector(private val context: Context) {
             interpreter = Interpreter(modelBuffer, options)
             val outputShape = interpreter?.getOutputTensor(0)?.shape()
             Log.i(TAG, "ObjectDetector: YOLO11 loaded, output shape is ${outputShape?.contentToString()}")
+            if (outputShape != null) {
+                outputArray = Array(outputShape[0]) { Array(outputShape[1]) { FloatArray(outputShape[2]) } }
+            }
             isInitialized = true
             Log.i(TAG, "ObjectDetector initialized successfully")
             true
@@ -136,7 +140,7 @@ class ObjectDetector(private val context: Context) {
             if (scaledBitmap != bitmap) scaledBitmap.recycle()
 
             val shape = interp.getOutputTensor(0).shape() // [1, 84, 8400] or [1, 8400, 84]
-            val outputArray = Array(shape[0]) { Array(shape[1]) { FloatArray(shape[2]) } }
+            val outputArray = this.outputArray ?: Array(shape[0]) { Array(shape[1]) { FloatArray(shape[2]) } }
             
             interp.run(inputBuffer, outputArray)
 
@@ -231,14 +235,16 @@ class ObjectDetector(private val context: Context) {
         buffer.order(ByteOrder.nativeOrder())
         val pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
         bitmap.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
-        for (px in pixels) {
-            val r = ((px shr 16) and 0xFF) / 255.0f
-            val g = ((px shr 8) and 0xFF) / 255.0f
-            val b = (px and 0xFF) / 255.0f
-            buffer.putFloat(r)
-            buffer.putFloat(g)
-            buffer.putFloat(b)
+        
+        val floatArray = FloatArray(INPUT_SIZE * INPUT_SIZE * 3)
+        var outIdx = 0
+        for (i in pixels.indices) {
+            val px = pixels[i]
+            floatArray[outIdx++] = ((px shr 16) and 0xFF) / 255.0f
+            floatArray[outIdx++] = ((px shr 8) and 0xFF) / 255.0f
+            floatArray[outIdx++] = (px and 0xFF) / 255.0f
         }
+        buffer.asFloatBuffer().put(floatArray)
         buffer.rewind()
         return buffer
     }

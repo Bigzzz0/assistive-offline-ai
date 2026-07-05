@@ -53,7 +53,8 @@ class DistancePipeline(
     private val TAG = "DistancePipeline"
 
     // Exponential Moving Average (EMA) filters for temporal smoothing (stability)
-    private var emaCenterDistance = -1f
+    var emaCenterDistance = -1f
+        private set
     private val objectEmaMap = mutableMapOf<String, Float>()
     private val objectMissedCounts = mutableMapOf<String, Int>()
     private val EMA_ALPHA = 0.20f // 20% weight to new value, 80% to old value for smooth transition
@@ -169,20 +170,50 @@ class DistancePipeline(
             }
         }
 
-        // 3. For each detected object, get depth at bounding box center
-        val results = mutableListOf<DistanceResult>()
+        // Batch coordinate query: Gather all points to query from DepthEstimator in a single batch
+        val pointsToQuery = mutableListOf<Pair<Float, Float>>()
+        
+        // Index 0: Center screen query
+        pointsToQuery.add(0.5f to 0.5f)
+        
+        // Indices 1 + 5*i to 5 + 5*i: 5-point cross pattern for each detected object
         for (obj in detected) {
-            val arcoreDepth = depthEstimator.getDepthAtBox(obj.boundingBox)
-            if (arcoreDepth > 0f) {
+            val box = obj.boundingBox
+            val cx = (box.left + box.right) / 2f
+            val cy = (box.top + box.bottom) / 2f
+            val w = box.width()
+            val h = box.height()
+            
+            pointsToQuery.add(cx to cy)
+            pointsToQuery.add((cx - w / 4f).coerceIn(0.01f, 0.99f) to cy)
+            pointsToQuery.add((cx + w / 4f).coerceIn(0.01f, 0.99f) to cy)
+            pointsToQuery.add(cx to (cy - h / 4f).coerceIn(0.01f, 0.99f))
+            pointsToQuery.add(cx to (cy + h / 4f).coerceIn(0.01f, 0.99f))
+        }
+
+        // Query all depth values in a single synchronous batch call on the GL thread
+        val allDepths = depthEstimator.getDepthAtPoints(pointsToQuery)
+
+        // Process object detection results
+        val results = mutableListOf<DistanceResult>()
+        for (i in detected.indices) {
+            val obj = detected[i]
+            val startIdx = 1 + 5 * i
+            
+            // Extract the 5 depth values queried for this object
+            val objectDepths = allDepths.subList(startIdx, startIdx + 5).filter { it > 0f }
+            val closestDepth = if (objectDepths.isNotEmpty()) objectDepths.minOrNull() ?: -1f else -1f
+            
+            if (closestDepth > 0f) {
                 // Reset missed count
                 objectMissedCounts[obj.label] = 0
                 
                 // Apply EMA smoothing
                 val oldEma = objectEmaMap[obj.label]
                 val smoothedDepth = if (oldEma == null || oldEma <= 0f) {
-                    arcoreDepth
+                    closestDepth
                 } else {
-                    (EMA_ALPHA * arcoreDepth) + ((1f - EMA_ALPHA) * oldEma)
+                    (EMA_ALPHA * closestDepth) + ((1f - EMA_ALPHA) * oldEma)
                 }
                 objectEmaMap[obj.label] = smoothedDepth
 
@@ -194,8 +225,8 @@ class DistancePipeline(
             }
         }
 
-        // Add center screen depth (0.5, 0.5) if not already covered by a bounding box
-        val centerDepth = depthEstimator.getDepthAtNormalizedPoint(0.5f, 0.5f)
+        // Extract center screen depth (Index 0)
+        val centerDepth = allDepths[0]
         val smoothedCenterDepth = if (centerDepth > 0f) {
             val oldCenterEma = emaCenterDistance
             val smoothed = if (oldCenterEma <= 0f) {
@@ -230,17 +261,17 @@ class DistancePipeline(
 
     /**
      * Depth-only fallback: no object detection model needed.
-     * Samples depth at 5 points across the frame center row and reports the closest one.
-     * Used when efficientdet_lite0.tflite is not available.
+     * Samples depth at 5 points across the frame center row in a single batch query.
      */
     private fun depthOnlyFallback(): List<DistanceResult> {
         // Sample points: left-edge, left-center, center, right-center, right-edge
         val samplePoints = listOf(0.1f to 0.5f, 0.3f to 0.5f, 0.5f to 0.5f, 0.7f to 0.5f, 0.9f to 0.5f)
+        val depths = depthEstimator.getDepthAtPoints(samplePoints)
+        
         var minDepth = Float.MAX_VALUE
         var isReal = false
 
-        for ((nx, ny) in samplePoints) {
-            val d = depthEstimator.getDepthAtNormalizedPoint(nx, ny)
+        for (d in depths) {
             if (d > 0f && d < minDepth) {
                 minDepth = d
                 isReal = true

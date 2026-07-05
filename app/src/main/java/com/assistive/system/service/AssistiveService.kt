@@ -237,7 +237,7 @@ class AssistiveService : Service() {
             prompt.contains("วัดระยะ") || prompt.contains("ตรงกลาง") || prompt.contains("ระยะ") -> {
                 _serviceStatus.value = "คำสั่ง: วัดระยะกึ่งกลาง..."
                 hapticManager.vibrateGeneralInfo()
-                val centerDepth = distancePipeline?.depthEstimator?.getDepthAtNormalizedPoint(0.5f, 0.5f) ?: -1f
+                val centerDepth = distancePipeline?.emaCenterDistance ?: -1f
                 if (centerDepth > 0f) {
                     val closestObstacle = distancePipeline?.lastDistanceResults?.firstOrNull { it.boundingBox.contains(0.5f, 0.5f) }
                     val label = closestObstacle?.labelThai ?: "วัตถุตรงกลาง"

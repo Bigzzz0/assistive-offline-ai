@@ -37,14 +37,13 @@ class DepthEstimator {
     @Volatile
     private var depthBuffer: java.nio.ShortBuffer? = null
 
-    // Thread-safe depth request queue for GL thread processing
-    data class DepthRequest(
-        val nx: Float,
-        val ny: Float,
-        val callback: (Float) -> Unit
+    // Thread-safe batch depth request queue for GL thread processing
+    data class BatchDepthRequest(
+        val points: List<Pair<Float, Float>>,
+        val callback: (List<Float>) -> Unit
     )
 
-    private val pendingDepthRequests = java.util.concurrent.ConcurrentLinkedQueue<DepthRequest>()
+    private val pendingBatchRequests = java.util.concurrent.ConcurrentLinkedQueue<BatchDepthRequest>()
 
     // ─── Public API ──────────────────────────────────────────────────────────
 
@@ -132,136 +131,99 @@ class DepthEstimator {
     }
 
     /**
-     * Submits a coordinate transform and depth query to be processed on the GL thread.
+     * Submits a list of coordinates to be mapped and sampled in batch on the GL thread.
      * Safely blocks the calling thread for up to 50ms.
      */
-    fun getDepthAtNormalizedPoint(nx: Float, ny: Float): Float {
-        if (!isRealArCoreActive) return -1f
+    fun getDepthAtPoints(points: List<Pair<Float, Float>>): List<Float> {
+        if (!isRealArCoreActive || points.isEmpty()) return List(points.size) { -1f }
 
         val latch = java.util.concurrent.CountDownLatch(1)
-        var result = -1f
+        var result = emptyList<Float>()
 
-        pendingDepthRequests.add(DepthRequest(nx, ny) { depth ->
-            result = depth
+        pendingBatchRequests.add(BatchDepthRequest(points) { depths ->
+            result = depths
             latch.countDown()
         })
 
         try {
             latch.await(50L, java.util.concurrent.TimeUnit.MILLISECONDS)
         } catch (e: Exception) {
-            Log.w(TAG, "Depth query latch timeout for point ($nx, $ny)")
+            Log.w(TAG, "Batch depth query latch timeout for ${points.size} points")
         }
 
-        return result
+        return if (result.isNotEmpty()) result else List(points.size) { -1f }
     }
 
     /**
-     * Process all queued depth queries synchronously on the GL thread using the current live frame.
+     * Process all queued batch requests synchronously on the GL thread using the current live frame.
      */
     fun processPendingDepthRequests(frame: Frame) {
         val buffer = synchronized(this) { depthBuffer }
         
         while (true) {
-            val request = pendingDepthRequests.poll() ?: break
+            val batch = pendingBatchRequests.poll() ?: break
             
             if (buffer == null) {
-                request.callback(-1f)
+                batch.callback(List(batch.points.size) { -1f })
                 continue
             }
 
-            try {
-                val viewCoords = floatArrayOf(request.nx, request.ny)
-                val cpuCoords = FloatArray(2)
-                frame.transformCoordinates2d(
-                    Coordinates2d.VIEW_NORMALIZED,
-                    viewCoords,
-                    Coordinates2d.IMAGE_NORMALIZED,
-                    cpuCoords
-                )
-                
-                val u = cpuCoords[0]
-                val v = cpuCoords[1]
-                
-                val cx = (u * depthWidth).toInt().coerceIn(0, depthWidth - 1)
-                val cy = (v * depthHeight).toInt().coerceIn(0, depthHeight - 1)
-                
-                // Sample 7x7 window to filter noise and invalid pixels
-                val depthValues = mutableListOf<Float>()
-                val radius = 3
-                
-                for (dy in -radius..radius) {
-                    for (dx in -radius..radius) {
-                        val x = (cx + dx).coerceIn(0, depthWidth - 1)
-                        val y = (cy + dy).coerceIn(0, depthHeight - 1)
-                        
-                        val byteOffset = y * depthRowStride + x * depthPixelStride
-                        val shortOffset = byteOffset / 2
-                        if (shortOffset in 0 until buffer.limit()) {
-                            // Apply 0x1FFF mask to extract clean 13-bit depth in millimeters (ignoring top 3 confidence bits)
-                            val depthMillimeters = buffer.get(shortOffset).toInt() and 0x1FFF
-                            if (depthMillimeters > 0) {
-                                val depthMeters = depthMillimeters / 1000.0f
-                                // Filter out unrealistic outliers
-                                if (depthMeters in 0.1f..8.0f) {
-                                    depthValues.add(depthMeters)
+            val results = ArrayList<Float>(batch.points.size)
+            for (i in batch.points.indices) {
+                val point = batch.points[i]
+                try {
+                    val viewCoords = floatArrayOf(point.first, point.second)
+                    val cpuCoords = FloatArray(2)
+                    frame.transformCoordinates2d(
+                        Coordinates2d.VIEW_NORMALIZED,
+                        viewCoords,
+                        Coordinates2d.IMAGE_NORMALIZED,
+                        cpuCoords
+                    )
+                    
+                    val u = cpuCoords[0]
+                    val v = cpuCoords[1]
+                    
+                    val cx = (u * depthWidth).toInt().coerceIn(0, depthWidth - 1)
+                    val cy = (v * depthHeight).toInt().coerceIn(0, depthHeight - 1)
+                    
+                    // Sample 7x7 window to filter noise and invalid pixels
+                    val depthValues = mutableListOf<Float>()
+                    val radius = 3
+                    
+                    for (dy in -radius..radius) {
+                        for (dx in -radius..radius) {
+                            val x = (cx + dx).coerceIn(0, depthWidth - 1)
+                            val y = (cy + dy).coerceIn(0, depthHeight - 1)
+                            
+                            val byteOffset = y * depthRowStride + x * depthPixelStride
+                            val shortOffset = byteOffset / 2
+                            if (shortOffset in 0 until buffer.limit()) {
+                                // Apply 0x1FFF mask to extract clean 13-bit depth in millimeters (ignoring top 3 confidence bits)
+                                val depthMillimeters = buffer.get(shortOffset).toInt() and 0x1FFF
+                                if (depthMillimeters > 0) {
+                                    val depthMeters = depthMillimeters / 1000.0f
+                                    // Filter out unrealistic outliers
+                                    if (depthMeters in 0.1f..8.0f) {
+                                        depthValues.add(depthMeters)
+                                    }
                                 }
                             }
                         }
                     }
+                    
+                    if (depthValues.isNotEmpty()) {
+                        depthValues.sort()
+                        results.add(depthValues[depthValues.size / 2])
+                    } else {
+                        results.add(-1f)
+                    }
+                } catch (e: Exception) {
+                    results.add(-1f)
                 }
-                
-                if (depthValues.isNotEmpty()) {
-                    depthValues.sort()
-                    val medianDepth = depthValues[depthValues.size / 2]
-                    request.callback(medianDepth.coerceIn(0.1f, 5.0f))
-                } else {
-                    request.callback(-1f)
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to query ARCore depth on GL thread: ${e.message}")
-                request.callback(-1f)
             }
+            batch.callback(results)
         }
-    }
-
-    /**
-     * Get the depth at the closest point of a normalized bounding box (using a cross sampling pattern).
-     */
-    fun getDepthAtBox(box: RectF): Float {
-        val cx = (box.left + box.right) / 2f
-        val cy = (box.top + box.bottom) / 2f
-        val w = box.width()
-        val h = box.height()
-        
-        // Sample center, and 4 points on a cross pattern (25% inset from boundaries)
-        val points = listOf(
-            cx to cy,
-            (cx - w / 4f).coerceIn(0.01f, 0.99f) to cy,
-            (cx + w / 4f).coerceIn(0.01f, 0.99f) to cy,
-            cx to (cy - h / 4f).coerceIn(0.01f, 0.99f),
-            cx to (cy + h / 4f).coerceIn(0.01f, 0.99f)
-        )
-        
-        val depths = mutableListOf<Float>()
-        for ((px, py) in points) {
-            val d = getDepthAtNormalizedPoint(px, py)
-            if (d > 0f) {
-                depths.add(d)
-            }
-        }
-        
-        return if (depths.isNotEmpty()) {
-            depths.minOrNull() ?: -1f
-        } else {
-            -1f
-        }
-    }
-
-    /**
-     * No-op / fallback returns -1f (disabled mock heuristics).
-     */
-    fun estimateDistanceHeuristic(box: RectF, label: String): Float {
-        return -1f
     }
 
     fun isDepthAvailable(): Boolean = synchronized(this) {

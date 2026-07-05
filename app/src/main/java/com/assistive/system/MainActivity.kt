@@ -669,7 +669,7 @@ class MainActivity : ComponentActivity() {
                                 val nx = offset.x / size.width
                                 val ny = offset.y / size.height
                                 cameraExecutor.execute {
-                                    val tappedDepth = depthEstimator?.getDepthAtNormalizedPoint(nx, ny) ?: -1f
+                                    val tappedDepth = depthEstimator?.getDepthAtPoints(listOf(nx to ny))?.firstOrNull() ?: -1f
                                     if (tappedDepth > 0f) {
                                         assistiveService?.hapticManager?.vibrateGeneralInfo()
                                         val distStr = String.format(java.util.Locale.US, "%.1f", tappedDepth)
@@ -785,7 +785,7 @@ class MainActivity : ComponentActivity() {
                             cameraExecutor.execute {
                                 // Try to get the smoothed EMA center distance from the active pipeline first
                                 val centerResult = distancePipeline?.lastDistanceResults?.firstOrNull { it.label == "center" }
-                                val centerDepth = centerResult?.distanceMeters ?: depthEstimator?.getDepthAtNormalizedPoint(0.5f, 0.5f) ?: -1f
+                                val centerDepth = centerResult?.distanceMeters ?: depthEstimator?.getDepthAtPoints(listOf(0.5f to 0.5f))?.firstOrNull() ?: -1f
                                 if (centerDepth > 0f) {
                                     val distStr = String.format(java.util.Locale.US, "%.1f", centerDepth)
                                     assistiveService?.audioPipeline?.speak("ระยะตรงกลาง $distStr เมตร")
@@ -965,7 +965,7 @@ class MainActivity : ComponentActivity() {
                             textAlign = TextAlign.Center
                         )
                     } else {
-                        val centerDistance = depthEstimator?.getDepthAtNormalizedPoint(0.5f, 0.5f) ?: -1f
+                        val centerDistance = distancePipeline?.emaCenterDistance ?: -1f
                         
                         Row(
                             modifier = Modifier.fillMaxWidth(),
