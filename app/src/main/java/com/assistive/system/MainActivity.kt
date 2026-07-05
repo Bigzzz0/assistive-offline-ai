@@ -149,15 +149,24 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        val isModelLoaded = isBound && assistiveService?.inferenceEngine?.isInitialized() == true
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
             Log.i("MainActivity", "Volume Up pressed - triggering OCR")
-            assistiveService?.hapticManager?.vibrateGeneralInfo()
-            assistiveService?.handleVoiceCommand("อ่าน")
+            if (isModelLoaded) {
+                assistiveService?.hapticManager?.vibrateGeneralInfo()
+                assistiveService?.handleVoiceCommand("อ่าน")
+            } else {
+                assistiveService?.hapticManager?.vibrateWarning()
+            }
             return true
         } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
             Log.i("MainActivity", "Volume Down pressed - triggering Object ID")
-            assistiveService?.hapticManager?.vibrateGeneralInfo()
-            assistiveService?.handleVoiceCommand("ดู")
+            if (isModelLoaded) {
+                assistiveService?.hapticManager?.vibrateGeneralInfo()
+                assistiveService?.handleVoiceCommand("ดู")
+            } else {
+                assistiveService?.hapticManager?.vibrateWarning()
+            }
             return true
         }
         return super.onKeyDown(keyCode, event)
@@ -227,6 +236,10 @@ class MainActivity : ComponentActivity() {
             assistiveService!!.currentlyAnalyzingBitmap.collectAsState()
         } else {
             remember { mutableStateOf<Bitmap?>(null) }
+        }
+
+        val isModelLoaded = remember(isBound, assistiveService, statusText) {
+            isBound && assistiveService?.inferenceEngine?.isInitialized() == true
         }
 
         var showDevPanel by remember { mutableStateOf(false) }
@@ -347,11 +360,15 @@ class MainActivity : ComponentActivity() {
                     .height(250.dp)
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color.Black)
-                    .pointerInput(currentMode) {
+                    .pointerInput(currentMode, isModelLoaded) {
                         detectTapGestures(
                             onDoubleTap = {
-                                assistiveService?.hapticManager?.vibrateGeneralInfo()
-                                assistiveService?.handleVoiceCommand(currentMode.command)
+                                if (isModelLoaded) {
+                                    assistiveService?.hapticManager?.vibrateGeneralInfo()
+                                    assistiveService?.handleVoiceCommand(currentMode.command)
+                                } else {
+                                    assistiveService?.hapticManager?.vibrateWarning()
+                                }
                             },
                             onTap = {
                                 announceMode(currentMode)
@@ -562,42 +579,54 @@ class MainActivity : ComponentActivity() {
                         assistiveService?.hapticManager?.vibrateGeneralInfo()
                         assistiveService?.handleVoiceCommand("อ่าน")
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D4ED8)),
+                    enabled = isModelLoaded,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF1D4ED8),
+                        disabledContainerColor = Color(0xFF1D4ED8).copy(alpha = 0.4f)
+                    ),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp)
                         .semantics { contentDescription = "ปุ่มขนาดใหญ่สำหรับอ่านข้อความภาษาไทย" }
                 ) {
-                    Text("📖 อ่านข้อความ (OCR)", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("📖 อ่านข้อความ (OCR)", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = if (isModelLoaded) Color.White else Color.White.copy(alpha = 0.6f))
                 }
                 Button(
                     onClick = {
                         assistiveService?.hapticManager?.vibrateGeneralInfo()
                         assistiveService?.handleVoiceCommand("ดู")
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                    enabled = isModelLoaded,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF059669),
+                        disabledContainerColor = Color(0xFF059669).copy(alpha = 0.4f)
+                    ),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp)
                         .semantics { contentDescription = "ปุ่มขนาดใหญ่สำหรับสแกนระบุสิ่งของ" }
                 ) {
-                    Text("👁️ ดูสิ่งของบนโต๊ะ", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("👁️ ดูสิ่งของบนโต๊ะ", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = if (isModelLoaded) Color.White else Color.White.copy(alpha = 0.6f))
                 }
                 Button(
                     onClick = {
                         assistiveService?.hapticManager?.vibrateGeneralInfo()
                         assistiveService?.handleVoiceCommand("ข้างหน้า")
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB45309)),
+                    enabled = isModelLoaded,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFB45309),
+                        disabledContainerColor = Color(0xFFB45309).copy(alpha = 0.4f)
+                    ),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp)
                         .semantics { contentDescription = "ปุ่มขนาดใหญ่สำหรับตรวจสอบสิ่งกีดขวางข้างหน้า" }
                 ) {
-                    Text("🚧 ตรวจสิ่งกีดขวางข้างหน้า", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("🚧 ตรวจสิ่งกีดขวางข้างหน้า", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = if (isModelLoaded) Color.White else Color.White.copy(alpha = 0.6f))
                 }
             }
 
@@ -725,7 +754,7 @@ class MainActivity : ComponentActivity() {
 
                 HorizontalDivider(color = Color.Gray.copy(alpha = 0.3f), modifier = Modifier.padding(vertical = 6.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("VLM: ${if (metrics.isVlmReal) "Gemma Real ✅" else "Mock ⚠️"}", color = Color.LightGray, fontSize = 11.sp)
+                    Text("VLM: ${if (metrics.isVlmReal) "Gemma Real (${metrics.activeBackend}) ✅" else "Mock ⚠️"}", color = Color.LightGray, fontSize = 11.sp)
                     Text("ASR: ${if (metrics.isAsrReal) "Sherpa Real ✅" else "Mock ⚠️"}", color = Color.LightGray, fontSize = 11.sp)
                 }
             }

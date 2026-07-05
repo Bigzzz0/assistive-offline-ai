@@ -22,7 +22,8 @@ data class PerformanceMetrics(
     val isVlmReal: Boolean = false,
     val isAsrReal: Boolean = false,
     val totalInferenceCount: Int = 0,
-    val averageLatencyMs: Long = 0L
+    val averageLatencyMs: Long = 0L,
+    val activeBackend: String = "None"
 )
 
 /**
@@ -68,8 +69,8 @@ class PerformanceMonitor(private val context: Context) {
     /**
      * อัปเดตสถานะ VLM (Real/Mock)
      */
-    fun updateVlmMode(isReal: Boolean) {
-        updateMetrics { copy(isVlmReal = isReal) }
+    fun updateVlmMode(isReal: Boolean, backend: String = "None") {
+        updateMetrics { copy(isVlmReal = isReal, activeBackend = backend) }
     }
 
     /**
