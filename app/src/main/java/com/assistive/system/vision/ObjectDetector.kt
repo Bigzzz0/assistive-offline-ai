@@ -24,22 +24,21 @@ data class DetectedObject(
 )
 
 /**
- * ObjectDetector wraps EfficientDet-Lite0 TFLite model for real-time object detection.
+ * ObjectDetector wraps YOLOv11 Nano TFLite model for real-time object detection.
  *
- * Model: efficientdet_lite0.tflite (must be placed in app/src/main/assets/)
- * Input: 320x320 RGB uint8 image
- * Output: bounding boxes, class labels, confidence scores, count
+ * Model: yolo11n.tflite (must be placed in app/src/main/assets/)
+ * Input: 640x640 RGB float32 image
+ * Output: bounding boxes + class confidence scores [1, 84, 8400]
  *
  * Backend priority: GPU Delegate → NNAPI Delegate → CPU
- * Falls back gracefully so the app always works on any device.
  */
 class ObjectDetector(private val context: Context) {
 
     private val TAG = "ObjectDetector"
-    private val MODEL_FILENAME = "efficientdet_lite0.tflite"
-    private val INPUT_SIZE = 320
-    private val MAX_DETECTIONS = 25
-    private val CONFIDENCE_THRESHOLD = 0.45f
+    private val MODEL_FILENAME = "yolo11n.tflite"
+    private val INPUT_SIZE = 640
+    private val CONFIDENCE_THRESHOLD = 0.40f
+    private val NMS_THRESHOLD = 0.45f
 
     private var interpreter: Interpreter? = null
     private var gpuDelegate: GpuDelegate? = null
@@ -84,7 +83,7 @@ class ObjectDetector(private val context: Context) {
         if (isInitialized) return true
         return try {
             val modelBuffer = loadModelFromAssets()
-            val options = Interpreter.Options().apply { numThreads = 2 }
+            val options = Interpreter.Options().apply { numThreads = 4 }
 
             // 1. Try GPU Delegate first
             var useGpu = false
@@ -113,6 +112,8 @@ class ObjectDetector(private val context: Context) {
             }
 
             interpreter = Interpreter(modelBuffer, options)
+            val outputShape = interpreter?.getOutputTensor(0)?.shape()
+            Log.i(TAG, "ObjectDetector: YOLO11 loaded, output shape is ${outputShape?.contentToString()}")
             isInitialized = true
             Log.i(TAG, "ObjectDetector initialized successfully")
             true
@@ -124,7 +125,7 @@ class ObjectDetector(private val context: Context) {
 
     /**
      * Run inference on a camera frame bitmap.
-     * @return List of detected objects above confidence threshold
+     * @return List of detected objects above confidence threshold after NMS
      */
     fun detect(bitmap: Bitmap): List<DetectedObject> {
         val interp = interpreter ?: return emptyList()
@@ -134,34 +135,73 @@ class ObjectDetector(private val context: Context) {
             val inputBuffer = bitmapToByteBuffer(scaledBitmap)
             if (scaledBitmap != bitmap) scaledBitmap.recycle()
 
-            // EfficientDet-Lite0 output tensors (metadata-embedded model):
-            // [0] boxes:   [1, 25, 4] — normalized (ymin, xmin, ymax, xmax)
-            // [1] classes: [1, 25]    — class index (float)
-            // [2] scores:  [1, 25]    — confidence score
-            // [3] count:   [1]        — number of valid detections
-            val outputBoxes   = Array(1) { Array(MAX_DETECTIONS) { FloatArray(4) } }
-            val outputClasses = Array(1) { FloatArray(MAX_DETECTIONS) }
-            val outputScores  = Array(1) { FloatArray(MAX_DETECTIONS) }
-            val outputCount   = FloatArray(1)
+            val shape = interp.getOutputTensor(0).shape() // [1, 84, 8400] or [1, 8400, 84]
+            val outputArray = Array(shape[0]) { Array(shape[1]) { FloatArray(shape[2]) } }
+            
+            interp.run(inputBuffer, outputArray)
 
-            val outputs = mapOf(0 to outputBoxes, 1 to outputClasses, 2 to outputScores, 3 to outputCount)
-            interp.runForMultipleInputsOutputs(arrayOf(inputBuffer), outputs)
-
-            val count = outputCount[0].toInt().coerceIn(0, MAX_DETECTIONS)
             val results = mutableListOf<DetectedObject>()
+            val isRowFormat = shape[1] < shape[2] // true if [1, 84, 8400]
+            val numBoxes = if (isRowFormat) shape[2] else shape[1]
+            val numClasses = 80 // COCO dataset
 
-            for (i in 0 until count) {
-                val score = outputScores[0][i]
-                if (score < CONFIDENCE_THRESHOLD) continue
-                val label = getLabel(outputClasses[0][i].toInt())
-                val box = outputBoxes[0][i]
-                // box = [ymin, xmin, ymax, xmax] normalized
-                results.add(DetectedObject(label, thaiLabels[label] ?: label, score,
-                    RectF(box[1], box[0], box[3], box[2])))
+            for (c in 0 until numBoxes) {
+                // Read raw center-x, center-y, width, height (in 640x640 scale)
+                val cx: Float
+                val cy: Float
+                val w: Float
+                val h: Float
+
+                if (isRowFormat) {
+                    cx = outputArray[0][0][c]
+                    cy = outputArray[0][1][c]
+                    w = outputArray[0][2][c]
+                    h = outputArray[0][3][c]
+                } else {
+                    cx = outputArray[0][c][0]
+                    cy = outputArray[0][c][1]
+                    w = outputArray[0][c][2]
+                    h = outputArray[0][c][3]
+                }
+
+                // Find class with maximum score
+                var maxScore = 0f
+                var maxClassIdx = -1
+                for (classIdx in 0 until numClasses) {
+                    val score = if (isRowFormat) {
+                        outputArray[0][4 + classIdx][c]
+                    } else {
+                        outputArray[0][c][4 + classIdx]
+                    }
+                    if (score > maxScore) {
+                        maxScore = score
+                        maxClassIdx = classIdx
+                    }
+                }
+
+                if (maxScore >= CONFIDENCE_THRESHOLD) {
+                    val label = getLabel(maxClassIdx)
+                    
+                    // Convert bounding box center coords to normalized [0..1] rectangle
+                    val left = (cx - w / 2f) / INPUT_SIZE
+                    val top = (cy - h / 2f) / INPUT_SIZE
+                    val right = (cx + w / 2f) / INPUT_SIZE
+                    val bottom = (cy + h / 2f) / INPUT_SIZE
+
+                    val rect = RectF(
+                        left.coerceIn(0f, 1f),
+                        top.coerceIn(0f, 1f),
+                        right.coerceIn(0f, 1f),
+                        bottom.coerceIn(0f, 1f)
+                    )
+                    results.add(DetectedObject(label, thaiLabels[label] ?: label, maxScore, rect))
+                }
             }
 
-            Log.d(TAG, "Detected ${results.size} objects above threshold")
-            results
+            // Apply Non-Maximum Suppression to remove duplicate boxes
+            val filteredResults = applyNMS(results)
+            Log.d(TAG, "Detected ${filteredResults.size} objects after NMS (originally ${results.size})")
+            filteredResults
         } catch (e: Exception) {
             Log.e(TAG, "detect() failed: ${e.message}", e)
             emptyList()
@@ -186,17 +226,58 @@ class ObjectDetector(private val context: Context) {
     }
 
     private fun bitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        val buffer = ByteBuffer.allocateDirect(1 * INPUT_SIZE * INPUT_SIZE * 3)
+        // float32 takes 4 bytes per float (1 * 640 * 640 * 3 * 4 = 4,915,200 bytes)
+        val buffer = ByteBuffer.allocateDirect(1 * INPUT_SIZE * INPUT_SIZE * 3 * 4)
         buffer.order(ByteOrder.nativeOrder())
         val pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
         bitmap.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
         for (px in pixels) {
-            buffer.put(((px shr 16) and 0xFF).toByte())
-            buffer.put(((px shr 8) and 0xFF).toByte())
-            buffer.put((px and 0xFF).toByte())
+            val r = ((px shr 16) and 0xFF) / 255.0f
+            val g = ((px shr 8) and 0xFF) / 255.0f
+            val b = (px and 0xFF) / 255.0f
+            buffer.putFloat(r)
+            buffer.putFloat(g)
+            buffer.putFloat(b)
         }
         buffer.rewind()
         return buffer
+    }
+
+    private fun applyNMS(objects: List<DetectedObject>): List<DetectedObject> {
+        val sorted = objects.sortedByDescending { it.confidence }.toMutableList()
+        val selected = mutableListOf<DetectedObject>()
+        
+        while (sorted.isNotEmpty()) {
+            val current = sorted.removeAt(0)
+            selected.add(current)
+            
+            val iterator = sorted.iterator()
+            while (iterator.hasNext()) {
+                val next = iterator.next()
+                if (calculateIoU(current.boundingBox, next.boundingBox) > NMS_THRESHOLD) {
+                    iterator.remove()
+                }
+            }
+        }
+        return selected
+    }
+
+    private fun calculateIoU(box1: RectF, box2: RectF): Float {
+        val intersectionLeft = maxOf(box1.left, box2.left)
+        val intersectionTop = maxOf(box1.top, box2.top)
+        val intersectionRight = minOf(box1.right, box2.right)
+        val intersectionBottom = minOf(box1.bottom, box2.bottom)
+
+        if (intersectionLeft >= intersectionRight || intersectionTop >= intersectionBottom) {
+            return 0f
+        }
+
+        val intersectionArea = (intersectionRight - intersectionLeft) * (intersectionBottom - intersectionTop)
+        val box1Area = (box1.right - box1.left) * (box1.bottom - box1.top)
+        val box2Area = (box2.right - box2.left) * (box2.bottom - box2.top)
+        val unionArea = box1Area + box2Area - intersectionArea
+
+        return if (unionArea > 0f) intersectionArea / unionArea else 0f
     }
 
     private fun getLabel(index: Int): String {
