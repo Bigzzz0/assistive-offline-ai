@@ -31,6 +31,13 @@ class VisionPipeline(
     private val onSceneChanged: (ByteArray) -> Unit
 ) : SensorEventListener {
 
+    /**
+     * Attach the DistancePipeline after it has been initialized on the background thread.
+     * Thread-safe: can be set at any time after construction.
+     */
+    @Volatile
+    var distancePipeline: DistancePipeline? = null
+
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
     private val gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
@@ -114,11 +121,10 @@ class VisionPipeline(
 
     @OptIn(ExperimentalGetImage::class)
     private fun processImage(imageProxy: ImageProxy) {
-        // Zero-CPU idle frame gating: close imageProxy and return immediately if no active request
-        if (!isFrameRequested()) {
-            imageProxy.close()
-            return
-        }
+        // NOTE: Do NOT re-check isFrameRequested() here — the outer Analyzer already decided to
+        // let this frame through. A second check causes the frame to be dropped because by the
+        // time processImage() runs (on a thread pool), the prompt may have already been polled
+        // from the queue by a concurrent path, making isFrameRequested() return false again.
 
         val image = imageProxy.image
         if (image == null || image.format != ImageFormat.YUV_420_888) {
@@ -144,16 +150,35 @@ class VisionPipeline(
         // - The user is NOT actively swinging/moving the device (avoids motion blur and saves CPU/GPU)
         // - The scene difference exceeds our threshold (visual change occurred)
         val hasSceneChanged = diff > SCENE_DIFF_THRESHOLD
-        
         val frameRequested = isFrameRequested()
-        Log.d("VisionPipeline", "Frame processed: motion=$isMoving, diff=${String.format("%.3f", diff)}, changed=$hasSceneChanged, requested=$frameRequested")
+        Log.d("VisionPipeline", "Frame: motion=$isMoving diff=${String.format("%.3f", diff)} changed=$hasSceneChanged requested=$frameRequested")
 
+        // ── Distance pipeline — ALWAYS runs every 200ms, no button press needed ──────────
+        // Capture the bitmap once here so it can be reused for both distance and VLM.
+        val rawBitmap = try {
+            imageProxy.toBitmap()
+        } catch (e: Exception) {
+            Log.w("VisionPipeline", "toBitmap() failed: ${e.message}")
+            imageProxy.close()
+            return
+        }
+
+        distancePipeline?.let { pipeline ->
+            try {
+                // Submit a copy — pipeline is async so it needs its own memory
+                pipeline.submitFrame(rawBitmap.copy(rawBitmap.config, false))
+            } catch (e: Exception) {
+                Log.w("VisionPipeline", "DistancePipeline submit failed: ${e.message}")
+            }
+        }
+
+        // ── VLM pipeline — only when explicitly requested or scene changes ────────────────
         if (frameRequested || (!isMoving && hasSceneChanged)) {
-            // Convert current image proxy directly to a JPEG ByteArray for VLM model consumption
-            val jpegBytes = imageProxyToJpegBytes(imageProxy)
+            val jpegBytes = bitmapToJpegBytes(rawBitmap, imageProxy.imageInfo.rotationDegrees)
             onSceneChanged(jpegBytes)
         }
 
+        rawBitmap.recycle()
         imageProxy.close()
     }
 
@@ -197,37 +222,34 @@ class VisionPipeline(
         return totalDiff / maxPossibleDiff
     }
 
-    private fun imageProxyToJpegBytes(image: ImageProxy): ByteArray {
-        val bitmap = image.toBitmap()
-        val rotationDegrees = image.imageInfo.rotationDegrees
+    /**
+     * Compress a pre-captured bitmap to JPEG bytes for VLM consumption.
+     * Accepts bitmap + rotation so the caller controls when toBitmap() is invoked,
+     * avoiding a second call after image planes are already consumed.
+     */
+    private fun bitmapToJpegBytes(bitmap: Bitmap, rotationDegrees: Int): ByteArray {
         val finalBitmap = if (rotationDegrees != 0) {
-            val matrix = Matrix().apply {
-                postRotate(rotationDegrees.toFloat())
-            }
-            val rotated = Bitmap.createBitmap(
-                bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
-            )
-            bitmap.recycle()
+            val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+            val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
             rotated
         } else {
             bitmap
         }
-        
-        // Downscale image to target resolution directly to avoid double JNI resizing overhead in InferenceEngine
+
         val prefs = context.getSharedPreferences("vlm_settings", Context.MODE_PRIVATE)
         val resolution = prefs.getInt("vlm_image_resolution", 224)
-        
-        Log.d("VisionPipeline", "Scaling camera frame to target VLM resolution: ${resolution}x${resolution}")
+        Log.d("VisionPipeline", "Scaling camera frame to VLM resolution: ${resolution}x${resolution}")
         val scaledBitmap = Bitmap.createScaledBitmap(finalBitmap, resolution, resolution, true)
-        if (scaledBitmap != finalBitmap) {
+        if (scaledBitmap != finalBitmap && finalBitmap != bitmap) {
             finalBitmap.recycle()
         }
-        
+
         val out = ByteArrayOutputStream()
         scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
         scaledBitmap.recycle()
         return out.toByteArray()
     }
+
 
     fun shutdown() {
         unregisterSensors()

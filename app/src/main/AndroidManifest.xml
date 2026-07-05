@@ -10,6 +10,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- ARCore optional: device doesn't need AR support to install, but Depth API activates on capable hardware -->
+    <uses-feature android:name="android.hardware.camera.ar" android:required="false"/>
+
     <application
         android:name=".AssistiveApp"
         android:allowBackup="true"
@@ -19,6 +22,9 @@
         android:supportsRtl="true"
         android:largeHeap="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
+        
+        <!-- ARCore: optional means app still installs on non-AR devices -->
+        <meta-data android:name="com.google.ar.core" android:value="optional"/>
         
         <!-- Enable loading of native OpenCL driver for GPU acceleration on Android 12+ (e.g. ColorOS) -->
         <uses-native-library android:name="libOpenCL.so" android:required="false" />

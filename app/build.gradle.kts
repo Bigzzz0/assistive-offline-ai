@@ -84,8 +84,15 @@ dependencies {
     // LiteRT-LM (AI Edge SDK)
     implementation(libs.google.litert.lm)
     
-    // Sherpa-ONNX
+    // Sherpa-ONNX ASR
     implementation(libs.sherpa.onnx)
+
+    // ARCore — Depth API for real-time obstacle distance measurement
+    implementation(libs.google.arcore)
+
+    // LiteRT TFLite — Object Detection (EfficientDet-Lite0, offline)
+    implementation(libs.google.litert)
+    implementation(libs.google.litert.gpu)
 
     // Testing
     testImplementation(libs.junit)

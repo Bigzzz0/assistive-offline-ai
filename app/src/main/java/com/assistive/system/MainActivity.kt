@@ -54,6 +54,10 @@ import com.assistive.system.download.ModelManager
 import com.assistive.system.logging.AppLogger
 import com.assistive.system.monitoring.PerformanceMetrics
 import com.assistive.system.service.AssistiveService
+import com.assistive.system.vision.DepthEstimator
+import com.assistive.system.vision.DistancePipeline
+import com.assistive.system.vision.DistanceResult
+import com.assistive.system.vision.ObjectDetector
 import com.assistive.system.vision.VisionPipeline
 import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
@@ -61,17 +65,29 @@ import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
 
-    private var assistiveService: AssistiveService? = null
-    private var isBound = false
+    private var assistiveService by mutableStateOf<AssistiveService?>(null)
+    private var isBound by mutableStateOf(false)
     private var visionPipeline: VisionPipeline? = null
     private lateinit var cameraExecutor: ExecutorService
+
+    // ─── ARCore + Object Detection ──────────────────────────────────────────
+    private var objectDetector: ObjectDetector? = null
+    private var depthEstimator: DepthEstimator? = null
+    private var distancePipeline: DistancePipeline? = null
+    private var isArInitialized = false
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as AssistiveService.LocalBinder
-            assistiveService = binder.getService()
+            val s = binder.getService()
+            assistiveService = s
             isBound = true
             Log.i("MainActivity", "Connected to AssistiveService.")
+            
+            // Attach distance pipeline if it is already initialized
+            distancePipeline?.let { pipeline ->
+                s.attachDistancePipeline(pipeline)
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -99,6 +115,7 @@ class MainActivity : ComponentActivity() {
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         checkPermissionsAndStart()
+        initializeArCorePipeline()
 
         setContent {
             MaterialTheme(
@@ -146,6 +163,89 @@ class MainActivity : ComponentActivity() {
         }
         visionPipeline?.shutdown()
         cameraExecutor.shutdown()
+        releaseArCorePipeline()
+    }
+
+    /**
+     * Initialize ARCore + ObjectDetector + DistancePipeline on a background thread.
+     *
+     * Works in three degraded modes:
+     *  Mode 1 (full):       OD model + ARCore Depth → labels + real depth
+     *  Mode 2 (depth-only): No OD model + ARCore Depth → "สิ่งกีดขวาง" + real depth
+     *  Mode 3 (heuristic):  OD model + no ARCore → labels + estimated depth
+     *
+     * Never returns without creating a DistancePipeline if ARCore is at all accessible.
+     */
+    private fun initializeArCorePipeline() {
+        if (isArInitialized) return
+        Thread {
+            try {
+                // Step 1: Try to load OD model (optional — degrades gracefully)
+                var detector: ObjectDetector? = null
+                try {
+                    val d = ObjectDetector(applicationContext)
+                    if (d.initialize()) {
+                        detector = d
+                        Log.i("MainActivity", "ObjectDetector loaded successfully")
+                    } else {
+                        d.release()
+                        Log.w("MainActivity", "ObjectDetector not available — running depth-only mode")
+                    }
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "ObjectDetector skipped (${e.message}) — depth-only mode")
+                }
+
+                // Step 2: Initialize DepthEstimator (ARCore) — always attempt
+                val depth = DepthEstimator()
+                val arcoreReady = depth.checkAndInstallArCore(this)
+                if (arcoreReady) {
+                    depth.initialize(this)
+                    Log.i("MainActivity", "ARCore Depth API initialized")
+                } else {
+                    Log.w("MainActivity", "ARCore not available — using heuristic depth fallback")
+                }
+
+                // Step 3: Always create DistancePipeline regardless of OD/ARCore status
+                val pipeline = DistancePipeline(
+                    context = applicationContext,
+                    objectDetector = detector,   // null = depth-only fallback
+                    depthEstimator = depth,
+                    onDistanceUpdate = { results ->
+                        assistiveService?.onDistanceUpdate(results)
+                    }
+                )
+
+                objectDetector = detector
+                depthEstimator = depth
+                distancePipeline = pipeline
+                isArInitialized = true
+
+                // Inject into VisionPipeline — safe because it's @Volatile
+                visionPipeline?.distancePipeline = pipeline
+
+                // Attach to service if already bound
+                assistiveService?.attachDistancePipeline(pipeline)
+
+                val mode = when {
+                    detector != null && depth.isDepthAvailable() -> "OD + ARCore Depth (full)"
+                    detector == null && depth.isDepthAvailable()  -> "ARCore Depth-only"
+                    detector != null                              -> "OD + heuristic depth"
+                    else                                          -> "heuristic depth only"
+                }
+                Log.i("MainActivity", "DistancePipeline started in mode: $mode")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "ARCore pipeline initialization failed: ${e.message}", e)
+            }
+        }.start()
+    }
+
+    private fun releaseArCorePipeline() {
+        try { distancePipeline?.release() } catch (ignored: Exception) {}
+        try { objectDetector?.release() } catch (ignored: Exception) {}
+        try { depthEstimator?.release() } catch (ignored: Exception) {}
+        distancePipeline = null; objectDetector = null; depthEstimator = null
+        isArInitialized = false
+        Log.i("MainActivity", "ARCore pipeline released")
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -236,6 +336,12 @@ class MainActivity : ComponentActivity() {
             assistiveService!!.currentlyAnalyzingBitmap.collectAsState()
         } else {
             remember { mutableStateOf<Bitmap?>(null) }
+        }
+
+        val distanceResults by if (isBound && assistiveService != null) {
+            assistiveService!!.distanceResults.collectAsState()
+        } else {
+            remember { mutableStateOf(emptyList<DistanceResult>()) }
         }
 
         val isModelLoaded = remember(isBound, assistiveService, statusText) {
@@ -392,10 +498,13 @@ class MainActivity : ComponentActivity() {
                             visionPipeline = VisionPipeline(
                                 context = ctx,
                                 lifecycleOwner = lifecycleOwner,
-                                isFrameRequested = { assistiveService?.hasPendingPrompt() == true }
-                            ) { jpegBytes ->
-                                assistiveService?.onCameraFrameAvailable(jpegBytes)
-                            }
+                                isFrameRequested = { assistiveService?.hasPendingPrompt() == true },
+                                onSceneChanged = { jpegBytes ->
+                                    assistiveService?.onCameraFrameAvailable(jpegBytes)
+                                }
+                            )
+                            // distancePipeline will be injected via visionPipeline.distancePipeline
+                            // once ARCore finishes initializing on its background thread
 
                             @Suppress("DEPRECATION")
                             val imageAnalysis = ImageAnalysis.Builder()
@@ -433,6 +542,13 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier
                             .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
                             .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+
+                if (distanceResults.isNotEmpty()) {
+                    ArDistanceOverlay(
+                        results = distanceResults,
+                        modifier = Modifier.align(Alignment.TopStart)
                     )
                 }
 
@@ -524,6 +640,73 @@ class MainActivity : ComponentActivity() {
                             color = if (perfMetrics.lastInferenceLatencyMs < 3000) Color(0xFF10B981) else Color(0xFFEF4444),
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ---- Dedicated ARCore Obstacle Distance Panel ----
+            val closestObstacle = distanceResults.firstOrNull()
+            val obstacleDistance = closestObstacle?.distanceMeters ?: 0f
+            val obstacleLabel = closestObstacle?.labelThai ?: "สิ่งกีดขวาง/กำแพง"
+            val distanceColor = when {
+                obstacleDistance <= 0f -> Color.Gray
+                obstacleDistance < 0.8f -> Color(0xFFEF4444) // Red
+                obstacleDistance < 1.5f -> Color(0xFFF59E0B) // Amber
+                obstacleDistance < 3.0f -> Color(0xFFEAB308) // Yellow
+                else -> Color(0xFF10B981) // Green
+            }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(2.dp, distanceColor),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "ระยะห่างจากสิ่งกีดขวางด้านหน้า: ${String.format(java.util.Locale.US, "%.1f", obstacleDistance)} เมตร"
+                    }
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "🧱 ระยะห่างสิ่งกีดขวาง / กำแพง (ARCore)",
+                        color = Color.LightGray,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        val alertIcon = when {
+                            obstacleDistance <= 0f -> "⚪"
+                            obstacleDistance < 0.8f -> "🔴"
+                            obstacleDistance < 1.5f -> "🟠"
+                            obstacleDistance < 3.0f -> "🟡"
+                            else -> "🟢"
+                        }
+                        Text(text = alertIcon, fontSize = 24.sp)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = if (obstacleDistance > 0f) String.format(java.util.Locale.US, "%.1f เมตร", obstacleDistance) else "0.0 เมตร",
+                            color = distanceColor,
+                            fontSize = 32.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                    if (closestObstacle != null && obstacleDistance > 0f) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "วัตถุที่ตรวจพบ: $obstacleLabel",
+                            color = Color.White.copy(alpha = 0.8f),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
@@ -927,6 +1110,9 @@ class MainActivity : ComponentActivity() {
         val context = LocalContext.current
         val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
         val logsText by AppLogger.logFlow.collectAsState()
+        val arcoreLogsText by AppLogger.arcoreLogFlow.collectAsState()
+        var selectedLogTab by remember { mutableStateOf(0) } // 0 = System, 1 = ARCore
+        val activeLogText = if (selectedLogTab == 0) logsText else arcoreLogsText
         Card(
             colors = CardDefaults.cardColors(containerColor = Color(0xFF334155)),
             shape = RoundedCornerShape(12.dp),
@@ -1119,32 +1305,51 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "📋 System Logs (app_logs.txt):",
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.weight(1f)
-                    )
+                    ) {
+                        TextButton(
+                            onClick = { selectedLogTab = 0 },
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = if (selectedLogTab == 0) Color(0xFF10B981) else Color.LightGray
+                            ),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Text("📋 System", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        TextButton(
+                            onClick = { selectedLogTab = 1 },
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = if (selectedLogTab == 1) Color(0xFF3B82F6) else Color.LightGray
+                            ),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Text("🧱 ARCore", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton(
                             onClick = {
-                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(logsText))
-                                android.widget.Toast.makeText(context, "คัดลอก Logs เรียบร้อยแล้ว", android.widget.Toast.LENGTH_SHORT).show()
+                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(activeLogText))
+                                android.widget.Toast.makeText(context, "คัดลอกเรียบร้อยแล้ว", android.widget.Toast.LENGTH_SHORT).show()
                             },
-                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF60A5FA))
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF60A5FA)),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
                         ) {
-                            Text("Copy Logs", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("Copy", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                         TextButton(
                             onClick = { AppLogger.clearLogs() },
-                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF87171))
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF87171)),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
                         ) {
-                            Text("Clear Logs", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("Clear", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
-
+ 
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1153,12 +1358,12 @@ class MainActivity : ComponentActivity() {
                         .padding(8.dp)
                 ) {
                     val scrollState = rememberScrollState()
-                    LaunchedEffect(logsText) {
+                    LaunchedEffect(activeLogText) {
                         scrollState.scrollTo(scrollState.maxValue)
                     }
                     Text(
-                        text = logsText.ifEmpty { "No logs recorded." },
-                        color = Color(0xFF4ADE80), // Terminal green
+                        text = activeLogText.ifEmpty { if (selectedLogTab == 0) "No system logs recorded." else "No ARCore logs recorded." },
+                        color = if (selectedLogTab == 0) Color(0xFF4ADE80) else Color(0xFF60A5FA), // Green for System, Blue for ARCore
                         fontSize = 10.sp,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                         modifier = Modifier
@@ -1223,5 +1428,141 @@ fun PerformanceMetricRow(
             color = color,
             trackColor = Color.White.copy(alpha = 0.1f)
         )
+    }
+}
+
+// ─── AR Distance Overlay ─────────────────────────────────────────────────────
+
+/**
+ * Real-time distance overlay shown inside the camera viewport.
+ *
+ * Layout:
+ *  ┌──────────────────────────────────────────────┐
+ *  │  🔍 วัดระยะ Real-Time            [ARCore✓]  │
+ *  │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━   │
+ *  │  🔴  คน                      0.6 เมตร       │
+ *  │  🟡  เก้าอี้                  1.2 เมตร       │
+ *  │  ⚪  โต๊ะ                     2.8 เมตร       │
+ *  └──────────────────────────────────────────────┘
+ *
+ * Color coding:
+ *   🔴 Red   — DANGER  (< 0.8m)
+ *   🟠 Amber — WARNING (< 1.5m)
+ *   🟡 Yellow— NEAR    (< 3.0m)
+ *   ⚪ Gray  — CLEAR   (≥ 3.0m)
+ */
+@Composable
+fun ArDistanceOverlay(
+    results: List<DistanceResult>,
+    modifier: Modifier = Modifier
+) {
+    val closest = results.firstOrNull()
+    val headerColor = when {
+        closest == null                              -> Color(0xFF10B981)
+        closest.distanceMeters < 0.8f               -> Color(0xFFEF4444)
+        closest.distanceMeters < 1.5f               -> Color(0xFFF59E0B)
+        closest.distanceMeters < 3.0f               -> Color(0xFFEAB308)
+        else                                         -> Color(0xFF10B981)
+    }
+    val depthLabel = if (closest?.isDepthReal == true) "ARCore ✓" else "ประมาณ"
+
+    Column(
+        modifier = modifier
+            .padding(8.dp)
+            .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        // ── Header row ───────────────────────────────────────────────────────
+        Row(
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "🔍 วัดระยะ",
+                color = headerColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = depthLabel,
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 10.sp
+            )
+        }
+
+        // ── Divider ──────────────────────────────────────────────────────────
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(Color.White.copy(alpha = 0.2f))
+        )
+
+        // ── Closest object — big display ─────────────────────────────────────
+        if (closest != null) {
+            val bigColor = when {
+                closest.distanceMeters < 0.8f  -> Color(0xFFEF4444)
+                closest.distanceMeters < 1.5f  -> Color(0xFFF59E0B)
+                closest.distanceMeters < 3.0f  -> Color(0xFFEAB308)
+                else                            -> Color.White
+            }
+            val distStr = String.format("%.1f", closest.distanceMeters)
+            val alertIcon = when {
+                closest.distanceMeters < 0.8f  -> "🔴"
+                closest.distanceMeters < 1.5f  -> "🟠"
+                closest.distanceMeters < 3.0f  -> "🟡"
+                else                            -> "⚪"
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(text = alertIcon, fontSize = 16.sp)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = closest.labelThai,
+                    color = bigColor,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "$distStr ม.",
+                    color = bigColor,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+            }
+        }
+
+        // ── Other objects (up to 4 more) ─────────────────────────────────────
+        results.drop(1).take(4).forEach { result ->
+            val distStr = String.format("%.1f", result.distanceMeters)
+            val textColor = when {
+                result.distanceMeters < 0.8f  -> Color(0xFFEF4444)
+                result.distanceMeters < 1.5f  -> Color(0xFFF59E0B)
+                result.distanceMeters < 3.0f  -> Color(0xFFEAB308)
+                else                           -> Color.LightGray
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = result.labelThai,
+                    color = textColor,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "$distStr ม.",
+                    color = textColor,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
     }
 }

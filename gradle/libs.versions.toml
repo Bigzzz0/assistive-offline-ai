@@ -10,6 +10,8 @@ activityCompose = "1.8.2"
 composeBom = "2024.02.02"
 camerax = "1.4.1"
 litertLm = "0.13.1"
+arcore = "1.46.0"
+litert = "1.4.0"
 sherpaOnnx = "v1.13.3"
 
 [libraries]
@@ -40,6 +42,13 @@ google-litert-lm = { group = "com.google.ai.edge.litertlm", name = "litertlm-and
 
 # Sherpa-ONNX ASR
 sherpa-onnx = { group = "com.github.k2-fsa", name = "sherpa-onnx", version.ref = "sherpaOnnx" }
+
+# ARCore (Depth API for real-time distance measurement)
+google-arcore = { group = "com.google.ar", name = "core", version.ref = "arcore" }
+
+# LiteRT TFLite (Object Detection models - EfficientDet)
+google-litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
+google-litert-gpu = { group = "com.google.ai.edge.litert", name = "litert-gpu", version.ref = "litert" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

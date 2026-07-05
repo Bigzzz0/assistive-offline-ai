@@ -21,6 +21,9 @@ object AppLogger {
     private val _logFlow = MutableStateFlow("")
     val logFlow: StateFlow<String> = _logFlow
 
+    private val _arcoreLogFlow = MutableStateFlow("")
+    val arcoreLogFlow: StateFlow<String> = _arcoreLogFlow
+
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
     fun init(context: Context) {
@@ -47,6 +50,18 @@ object AppLogger {
                 _logFlow.value = content
             } else {
                 _logFlow.value = "Logs started.\n"
+            }
+
+            val arcoreFile = getArcoreLogFile()
+            if (arcoreFile != null && arcoreFile.exists()) {
+                val content = try {
+                    arcoreFile.readText().takeLast(50000)
+                } catch (e: Exception) {
+                    "Error loading ARCore logs: ${e.message}"
+                }
+                _arcoreLogFlow.value = content
+            } else {
+                _arcoreLogFlow.value = "ARCore logs started.\n"
             }
         }
     }
@@ -99,7 +114,21 @@ object AppLogger {
         writeLog("ERROR", tag, fullMsg)
     }
 
+    private fun getArcoreLogFile(): File? {
+        val dir = appContext?.filesDir ?: return null
+        return File(dir, "arcore_logs.txt")
+    }
+
     private fun writeLog(level: String, tag: String, message: String) {
+        val isVisionOrArCore = tag == "ARCore" || tag == "VisionPipeline" || 
+                               tag == "DistancePipeline" || tag == "ObjectDetector" || 
+                               tag == "DepthEstimator" || tag.contains("ARCore", ignoreCase = true)
+
+        if (isVisionOrArCore) {
+            writeVisionLog(level, tag, message)
+            return
+        }
+
         val file = getLogFile() ?: return
         logScope.launch {
             try {
@@ -120,6 +149,30 @@ object AppLogger {
                 _logFlow.value = newContent
             } catch (e: Exception) {
                 Log.e("AppLogger", "Failed to write log to file: ${e.message}")
+            }
+        }
+    }
+
+    private fun writeVisionLog(level: String, tag: String, message: String) {
+        val file = getArcoreLogFile() ?: return
+        logScope.launch {
+            try {
+                val timeStr = dateFormat.format(Date())
+                val formatted = "[$timeStr] [$level] [$tag] $message\n"
+                FileWriter(file, true).use { writer ->
+                    writer.write(formatted)
+                }
+
+                // Append to arcore state flow for real-time display in UI
+                val current = _arcoreLogFlow.value
+                val newContent = if (current.length > 50000) {
+                    current.substring(current.length - 30000) + formatted
+                } else {
+                    current + formatted
+                }
+                _arcoreLogFlow.value = newContent
+            } catch (e: Exception) {
+                Log.e("AppLogger", "Failed to write vision log: ${e.message}")
             }
         }
     }
@@ -156,13 +209,18 @@ object AppLogger {
     }
 
     fun clearLogs() {
-        val file = getLogFile() ?: return
+        val file = getLogFile()
+        val arcoreFile = getArcoreLogFile()
         logScope.launch {
             try {
-                if (file.exists()) {
+                if (file != null && file.exists()) {
                     file.delete()
                 }
+                if (arcoreFile != null && arcoreFile.exists()) {
+                    arcoreFile.delete()
+                }
                 _logFlow.value = "Logs cleared.\n"
+                _arcoreLogFlow.value = "ARCore logs cleared.\n"
             } catch (e: Exception) {
                 Log.e("AppLogger", "Failed to clear logs: ${e.message}")
             }

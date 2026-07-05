@@ -20,6 +20,9 @@ import com.assistive.system.ai.InferenceEngine
 import com.assistive.system.audio.AudioPipeline
 import com.assistive.system.haptic.HapticManager
 import com.assistive.system.monitoring.PerformanceMonitor
+import com.assistive.system.vision.AlertLevel
+import com.assistive.system.vision.DistancePipeline
+import com.assistive.system.vision.DistanceResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -64,7 +67,20 @@ class AssistiveService : Service() {
     private val MAX_QUEUE_SIZE = 1
     private var isAnalyzing = false
     private var activeAnalysisJob: kotlinx.coroutines.Job? = null
- 
+
+    // ─── Distance / AR subsystem ─────────────────────────────────────────────
+    /** Publicly exposed so MainActivity can read and render AR overlay */
+    private val _distanceResults = MutableStateFlow<List<DistanceResult>>(emptyList())
+    val distanceResults: StateFlow<List<DistanceResult>> = _distanceResults
+
+    /** External DistancePipeline injected by MainActivity after ARCore init */
+    var distancePipeline: DistancePipeline? = null
+        private set
+
+    private var lastAlertTimeMs = 0L
+    private val ALERT_COOLDOWN_MS = 1500L  // Minimum gap between TTS distance alerts
+    private var lastDangerAlertMs = 0L
+    private val DANGER_COOLDOWN_MS = 800L
     private val NOTIFICATION_ID = 1001
     private val CHANNEL_ID = "AssistiveServiceChannel"
 
@@ -136,6 +152,62 @@ class AssistiveService : Service() {
 
     fun hasPendingPrompt(): Boolean {
         return !isAnalyzing && !pendingPromptsQueue.isEmpty()
+    }
+
+    /**
+     * Called by MainActivity after ARCore + ObjectDetector initialization is complete.
+     * Wires the DistancePipeline into the service and starts real-time processing.
+     */
+    fun attachDistancePipeline(pipeline: DistancePipeline) {
+        distancePipeline = pipeline
+        pipeline.start()
+        Log.i("AssistiveService", "DistancePipeline attached and started")
+    }
+
+    /**
+     * Callback from DistancePipeline — receives real-time distance results and
+     * triggers appropriate haptic + TTS alerts based on proximity thresholds.
+     *
+     * Alert levels:
+     *  DANGER  (< 0.8m)  → immediate danger vibration + TTS, 800ms cooldown
+     *  WARNING (< 1.5m)  → warning vibration + TTS, 1500ms cooldown
+     *  NEAR    (< 3.0m)  → gentle haptic only
+     */
+    fun onDistanceUpdate(results: List<DistanceResult>) {
+        _distanceResults.value = results
+        if (results.isEmpty()) return
+
+        val now = System.currentTimeMillis()
+        val closest = results.first() // already sorted by distance ascending
+
+        when (distancePipeline?.getAlertLevel(closest.distanceMeters)) {
+            AlertLevel.DANGER -> {
+                if (now - lastDangerAlertMs >= DANGER_COOLDOWN_MS) {
+                    lastDangerAlertMs = now
+                    lastAlertTimeMs = now
+                    hapticManager.vibrateDanger()
+                    val distStr = String.format("%.1f", closest.distanceMeters)
+                    audioPipeline.speak("${closest.labelThai} ระยะ $distStr เมตร")
+                    Log.w("AssistiveService", "DANGER: ${closest.labelThai} at ${closest.distanceMeters}m")
+                }
+            }
+            AlertLevel.WARNING -> {
+                if (now - lastAlertTimeMs >= ALERT_COOLDOWN_MS) {
+                    lastAlertTimeMs = now
+                    hapticManager.vibrateWarning()
+                    val distStr = String.format("%.1f", closest.distanceMeters)
+                    audioPipeline.speak("${closest.labelThai} ${distStr} เมตร")
+                    Log.i("AssistiveService", "WARNING: ${closest.labelThai} at ${closest.distanceMeters}m")
+                }
+            }
+            AlertLevel.NEAR -> {
+                if (now - lastAlertTimeMs >= ALERT_COOLDOWN_MS * 2) {
+                    lastAlertTimeMs = now
+                    hapticManager.vibrateGeneralInfo()
+                }
+            }
+            else -> { /* CLEAR — no alert needed */ }
+        }
     }
 
     private fun enqueuePrompt(promptStr: String) {
@@ -271,17 +343,24 @@ class AssistiveService : Service() {
                 // Trigger Haptic Feedback based on the VLM output severity
                 triggerResponseHaptics(validatedOutput)
 
-                // Speak the VLM output safely
-                kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
-                    var resumed = false
-                    audioPipeline.speak(validatedOutput) {
-                        if (!resumed) {
-                            resumed = true
-                            if (cont.isActive) {
-                                cont.resumeWith(Result.success(Unit))
+                // Speak the VLM output safely with a timeout so the engine never locks permanently
+                try {
+                    val speakTimeout = (validatedOutput.length * 150L).coerceIn(5000L, 25000L)
+                    kotlinx.coroutines.withTimeoutOrNull(speakTimeout) {
+                        kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
+                            var resumed = false
+                            audioPipeline.speak(validatedOutput) {
+                                if (!resumed) {
+                                    resumed = true
+                                    if (cont.isActive) {
+                                        cont.resumeWith(Result.success(Unit))
+                                    }
+                                }
                             }
                         }
                     }
+                } catch (speakEx: Exception) {
+                    Log.w("AssistiveService", "Timeout or issue during TTS speech: ${speakEx.message}")
                 }
 
             } catch (e: Exception) {
@@ -387,6 +466,7 @@ class AssistiveService : Service() {
     override fun onDestroy() {
         Log.i("AssistiveService", "Service onDestroy")
         serviceScope.cancel()
+        distancePipeline?.release()
         audioPipeline.release()
         inferenceEngine.release()
         super.onDestroy()

@@ -277,8 +277,13 @@ class AudioPipeline(
     }
 
     fun speak(text: String, onComplete: () -> Unit = {}) {
-        if (!isTtsReady) {
-            Log.w("AudioPipeline", "TTS not ready yet. Text: $text")
+        if (text.isBlank()) {
+            onComplete()
+            return
+        }
+
+        if (!isTtsReady || tts == null) {
+            Log.w("AudioPipeline", "TTS not ready yet or null. Text: $text")
             onComplete()
             return
         }
@@ -299,13 +304,19 @@ class AudioPipeline(
             }
         })
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+        val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
         } else {
             val params = HashMap<String, String>()
             params[TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID] = utteranceId
             @Suppress("DEPRECATION")
             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params)
+        }
+
+        if (result != TextToSpeech.SUCCESS) {
+            Log.e("AudioPipeline", "tts.speak returned error code: $result")
+            abandonAudioFocus()
+            onComplete()
         }
     }
 
