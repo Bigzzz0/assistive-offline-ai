@@ -46,6 +46,13 @@ class ObjectDetector(private val context: Context) {
     private var isInitialized = false
     private var outputArray: Array<Array<FloatArray>>? = null
 
+    // Pre-allocated static buffers for zero-allocation real-time inference
+    private var scaledBitmap: Bitmap? = null
+    private var canvas: android.graphics.Canvas? = null
+    private lateinit var inputBuffer: ByteBuffer
+    private lateinit var pixels: IntArray
+    private lateinit var floatArray: FloatArray
+
     // COCO 80-class label → Thai name mapping (for TTS)
     private val thaiLabels = mapOf(
         "person"        to "คน",
@@ -118,6 +125,16 @@ class ObjectDetector(private val context: Context) {
             if (outputShape != null) {
                 outputArray = Array(outputShape[0]) { Array(outputShape[1]) { FloatArray(outputShape[2]) } }
             }
+            
+            // Pre-allocate image processing buffers once
+            scaledBitmap = Bitmap.createBitmap(INPUT_SIZE, INPUT_SIZE, Bitmap.Config.ARGB_8888)
+            canvas = android.graphics.Canvas(scaledBitmap!!)
+            inputBuffer = ByteBuffer.allocateDirect(1 * INPUT_SIZE * INPUT_SIZE * 3 * 4).apply {
+                order(ByteOrder.nativeOrder())
+            }
+            pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
+            floatArray = FloatArray(INPUT_SIZE * INPUT_SIZE * 3)
+            
             isInitialized = true
             Log.i(TAG, "ObjectDetector initialized successfully")
             true
@@ -135,14 +152,18 @@ class ObjectDetector(private val context: Context) {
         val interp = interpreter ?: return emptyList()
 
         return try {
-            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, INPUT_SIZE, INPUT_SIZE, true)
-            val inputBuffer = bitmapToByteBuffer(scaledBitmap)
-            if (scaledBitmap != bitmap) scaledBitmap.recycle()
+            val targetBitmap = scaledBitmap ?: Bitmap.createBitmap(INPUT_SIZE, INPUT_SIZE, Bitmap.Config.ARGB_8888).also { scaledBitmap = it }
+            val targetCanvas = canvas ?: android.graphics.Canvas(targetBitmap).also { canvas = it }
+            
+            // Scale and draw input bitmap in-place
+            targetCanvas.drawBitmap(bitmap, null, RectF(0f, 0f, INPUT_SIZE.toFloat(), INPUT_SIZE.toFloat()), null)
+            
+            val buffer = bitmapToByteBuffer(targetBitmap)
 
             val shape = interp.getOutputTensor(0).shape() // [1, 84, 8400] or [1, 8400, 84]
             val outputArray = this.outputArray ?: Array(shape[0]) { Array(shape[1]) { FloatArray(shape[2]) } }
             
-            interp.run(inputBuffer, outputArray)
+            interp.run(buffer, outputArray)
 
             val results = mutableListOf<DetectedObject>()
             val isRowFormat = shape[1] < shape[2] // true if [1, 84, 8400]
@@ -216,6 +237,9 @@ class ObjectDetector(private val context: Context) {
         try { interpreter?.close() } catch (ignored: Exception) {}
         try { gpuDelegate?.close() } catch (ignored: Exception) {}
         try { nnApiDelegate?.close() } catch (ignored: Exception) {}
+        scaledBitmap?.recycle()
+        scaledBitmap = null
+        canvas = null
         interpreter = null; gpuDelegate = null; nnApiDelegate = null
         isInitialized = false
         Log.i(TAG, "ObjectDetector released")
@@ -230,13 +254,9 @@ class ObjectDetector(private val context: Context) {
     }
 
     private fun bitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        // float32 takes 4 bytes per float (1 * 640 * 640 * 3 * 4 = 4,915,200 bytes)
-        val buffer = ByteBuffer.allocateDirect(1 * INPUT_SIZE * INPUT_SIZE * 3 * 4)
-        buffer.order(ByteOrder.nativeOrder())
-        val pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
+        // Reuse pre-allocated arrays to guarantee zero-allocation loop
         bitmap.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
         
-        val floatArray = FloatArray(INPUT_SIZE * INPUT_SIZE * 3)
         var outIdx = 0
         for (i in pixels.indices) {
             val px = pixels[i]
@@ -244,9 +264,10 @@ class ObjectDetector(private val context: Context) {
             floatArray[outIdx++] = ((px shr 8) and 0xFF) / 255.0f
             floatArray[outIdx++] = (px and 0xFF) / 255.0f
         }
-        buffer.asFloatBuffer().put(floatArray)
-        buffer.rewind()
-        return buffer
+        inputBuffer.rewind()
+        inputBuffer.asFloatBuffer().put(floatArray)
+        inputBuffer.rewind()
+        return inputBuffer
     }
 
     private fun applyNMS(objects: List<DetectedObject>): List<DetectedObject> {
