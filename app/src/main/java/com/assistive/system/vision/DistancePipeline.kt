@@ -52,6 +52,12 @@ class DistancePipeline(
         private set
     private val TAG = "DistancePipeline"
 
+    // Exponential Moving Average (EMA) filters for temporal smoothing (stability)
+    private var emaCenterDistance = -1f
+    private val objectEmaMap = mutableMapOf<String, Float>()
+    private val objectMissedCounts = mutableMapOf<String, Int>()
+    private val EMA_ALPHA = 0.20f // 20% weight to new value, 80% to old value for smooth transition
+
     // Alert thresholds
     companion object {
         const val THRESHOLD_DANGER  = 0.8f   // meters — immediate vibration + speech
@@ -149,14 +155,40 @@ class DistancePipeline(
             return depthOnlyFallback()
         }
 
+        // Track which labels are detected in this frame
+        val detectedLabels = detected.map { it.label }.toSet()
+        
+        // Increment missed counts for any objects that were in our map but not detected in this frame
+        val missingLabels = objectEmaMap.keys.filter { it !in detectedLabels }
+        for (label in missingLabels) {
+            val count = (objectMissedCounts[label] ?: 0) + 1
+            objectMissedCounts[label] = count
+            if (count > 5) { // If missing for ~1 second (5 ticks * 200ms), remove from history
+                objectEmaMap.remove(label)
+                objectMissedCounts.remove(label)
+            }
+        }
+
         // 3. For each detected object, get depth at bounding box center
         val results = mutableListOf<DistanceResult>()
         for (obj in detected) {
             val arcoreDepth = depthEstimator.getDepthAtBox(obj.boundingBox)
             if (arcoreDepth > 0f) {
+                // Reset missed count
+                objectMissedCounts[obj.label] = 0
+                
+                // Apply EMA smoothing
+                val oldEma = objectEmaMap[obj.label]
+                val smoothedDepth = if (oldEma == null || oldEma <= 0f) {
+                    arcoreDepth
+                } else {
+                    (EMA_ALPHA * arcoreDepth) + ((1f - EMA_ALPHA) * oldEma)
+                }
+                objectEmaMap[obj.label] = smoothedDepth
+
                 results.add(DistanceResult(
                     label = obj.label, labelThai = obj.labelThai,
-                    distanceMeters = arcoreDepth, confidence = obj.confidence,
+                    distanceMeters = smoothedDepth, confidence = obj.confidence,
                     boundingBox = obj.boundingBox, isDepthReal = true
                 ))
             }
@@ -164,12 +196,26 @@ class DistancePipeline(
 
         // Add center screen depth (0.5, 0.5) if not already covered by a bounding box
         val centerDepth = depthEstimator.getDepthAtNormalizedPoint(0.5f, 0.5f)
-        if (centerDepth > 0f) {
+        val smoothedCenterDepth = if (centerDepth > 0f) {
+            val oldCenterEma = emaCenterDistance
+            val smoothed = if (oldCenterEma <= 0f) {
+                centerDepth
+            } else {
+                (EMA_ALPHA * centerDepth) + ((1f - EMA_ALPHA) * oldCenterEma)
+            }
+            emaCenterDistance = smoothed
+            smoothed
+        } else {
+            emaCenterDistance = -1f // Reset center EMA if invalid
+            -1f
+        }
+
+        if (smoothedCenterDepth > 0f) {
             val coversCenter = results.any { it.boundingBox.contains(0.5f, 0.5f) }
             if (!coversCenter) {
                 results.add(DistanceResult(
                     label = "center", labelThai = "ตรงกลางภาพ",
-                    distanceMeters = centerDepth, confidence = 1.0f,
+                    distanceMeters = smoothedCenterDepth, confidence = 1.0f,
                     boundingBox = android.graphics.RectF(0.45f, 0.45f, 0.55f, 0.55f),
                     isDepthReal = true
                 ))
@@ -202,13 +248,22 @@ class DistancePipeline(
         }
 
         if (minDepth == Float.MAX_VALUE || minDepth <= 0f) {
+            emaCenterDistance = -1f
             lastDistanceResults = emptyList()
             return emptyList()
         }
 
+        // Apply EMA to center fallback distance as well
+        val smoothed = if (emaCenterDistance <= 0f) {
+            minDepth
+        } else {
+            (EMA_ALPHA * minDepth) + ((1f - EMA_ALPHA) * emaCenterDistance)
+        }
+        emaCenterDistance = smoothed
+
         val resultsList = listOf(DistanceResult(
             label = "obstacle", labelThai = "สิ่งกีดขวาง",
-            distanceMeters = minDepth, confidence = 1.0f,
+            distanceMeters = smoothed, confidence = 1.0f,
             boundingBox = android.graphics.RectF(0.3f, 0.3f, 0.7f, 0.7f),
             isDepthReal = isReal
         ))
