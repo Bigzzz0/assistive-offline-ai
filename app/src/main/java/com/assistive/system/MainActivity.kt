@@ -324,7 +324,11 @@ class MainActivity : ComponentActivity() {
                 if (arcoreReady && depth.isRealArCoreActive) {
                     Log.i("MainActivity", "ARCore Depth API initialized")
                 } else {
-                    Log.w("MainActivity", "ARCore not available — using heuristic depth fallback")
+                    val errMsg = depth.arCoreErrorMessage ?: "อุปกรณ์ไม่รองรับหรือยังไม่ได้ติดตั้ง ARCore"
+                    Log.w("MainActivity", "ARCore not available: $errMsg")
+                    runOnUiThread {
+                        assistiveService?.audioPipeline?.speak("คำเตือน ระบบวัดระยะด้วยเออาร์คอร์ไม่สามารถทำงานได้ เนื่องจาก $errMsg")
+                    }
                 }
 
                 // Step 3: Always create DistancePipeline regardless of OD/ARCore status
@@ -806,9 +810,13 @@ class MainActivity : ComponentActivity() {
 
             // ---- Dedicated ARCore Obstacle Distance Panel ----
             val closestObstacle = distanceResults.firstOrNull()
-            val obstacleDistance = closestObstacle?.distanceMeters ?: 0f
+            val obstacleDistance = closestObstacle?.distanceMeters ?: -1f
             val obstacleLabel = closestObstacle?.labelThai ?: "สิ่งกีดขวาง/กำแพง"
+            val isArCoreActive = depthEstimator?.isRealArCoreActive == true
+            val arCoreError = depthEstimator?.arCoreErrorMessage
+
             val distanceColor = when {
+                !isArCoreActive -> Color(0xFFEF4444) // Red for unavailable
                 obstacleDistance <= 0f -> Color.Gray
                 obstacleDistance < 0.8f -> Color(0xFFEF4444) // Red
                 obstacleDistance < 1.5f -> Color(0xFFF59E0B) // Amber
@@ -823,7 +831,11 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .fillMaxWidth()
                     .semantics(mergeDescendants = true) {
-                        contentDescription = "ระยะห่างจากสิ่งกีดขวางด้านหน้า: ${String.format(java.util.Locale.US, "%.1f", obstacleDistance)} เมตร"
+                        contentDescription = if (!isArCoreActive) {
+                            "ไม่สามารถวัดระยะทางด้วย ARCore ได้: ${arCoreError ?: "ไม่ทราบสาเหตุ"}"
+                        } else {
+                            "ระยะห่างจากสิ่งกีดขวางด้านหน้า: ${String.format(java.util.Locale.US, "%.1f", obstacleDistance)} เมตร"
+                        }
                     }
             ) {
                 Column(
@@ -837,34 +849,45 @@ class MainActivity : ComponentActivity() {
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(6.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        val alertIcon = when {
-                            obstacleDistance <= 0f -> "⚪"
-                            obstacleDistance < 0.8f -> "🔴"
-                            obstacleDistance < 1.5f -> "🟠"
-                            obstacleDistance < 3.0f -> "🟡"
-                            else -> "🟢"
-                        }
-                        Text(text = alertIcon, fontSize = 24.sp)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = if (obstacleDistance > 0f) String.format(java.util.Locale.US, "%.1f เมตร", obstacleDistance) else "0.0 เมตร",
-                            color = distanceColor,
-                            fontSize = 32.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                    }
-                    if (closestObstacle != null && obstacleDistance > 0f) {
+                    if (!isArCoreActive) {
+                        Text(text = "❌ ARCore ไม่พร้อมใช้งาน", color = Color(0xFFEF4444), fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "วัตถุที่ตรวจพบ: $obstacleLabel",
-                            color = Color.White.copy(alpha = 0.8f),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
+                            text = arCoreError ?: "ไม่ทราบสาเหตุ หรือสลับไปทำงานบน fallback สำรอง",
+                            color = Color.LightGray,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center
                         )
+                    } else {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            val alertIcon = when {
+                                obstacleDistance <= 0f -> "⚪"
+                                obstacleDistance < 0.8f -> "🔴"
+                                obstacleDistance < 1.5f -> "🟠"
+                                obstacleDistance < 3.0f -> "🟡"
+                                else -> "🟢"
+                            }
+                            Text(text = alertIcon, fontSize = 24.sp)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = if (obstacleDistance > 0f) String.format(java.util.Locale.US, "%.1f เมตร", obstacleDistance) else "0.0 เมตร",
+                                color = distanceColor,
+                                fontSize = 32.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                        if (closestObstacle != null && obstacleDistance > 0f) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "วัตถุที่ตรวจพบ: $obstacleLabel",
+                                color = Color.White.copy(alpha = 0.8f),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                 }
             }

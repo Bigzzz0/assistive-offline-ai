@@ -3,13 +3,8 @@ package com.assistive.system.vision
 import android.app.Activity
 import android.content.Context
 import android.graphics.RectF
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
 import com.assistive.system.logging.AppLogger as Log
 import kotlin.math.abs
-import kotlin.math.tan
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Session
 import com.google.ar.core.Config
@@ -18,37 +13,20 @@ import com.google.ar.core.Coordinates2d
 
 /**
  * DepthEstimator provides real-time distance measurements (in meters) to obstacles
- * and the ground/wall in front of the user.
- *
- * Technical Resolution:
- * Since ARCore's native Session requires exclusive low-level camera control (via Camera2)
- * and conflicts with CameraX (causing camera preview stutters every 5 seconds and failing to
- * query depth, returning 0.0m), this class uses a smart sensor-based pitch/tilt triangulation
- * algorithm combined with a fallback heuristic.
- *
- * Triangulation:
- *   - Uses the device's accelerometer to determine the camera's tilt (pitch angle).
- *   - Under hand-held usage (height ~1.25m), the distance to the ground center is:
- *     Distance = Height * cot(pitch) = Height * (-gravity_y / gravity_z)
- *   - This provides real-time dynamic distance updates at 60 FPS without camera conflicts.
+ * and the ground/wall in front of the user using native Google ARCore Depth API.
  */
-class DepthEstimator : SensorEventListener {
+class DepthEstimator {
 
     private val TAG = "DepthEstimator"
 
-    private var sensorManager: SensorManager? = null
-    private var accelerometer: Sensor? = null
-    
-    // Live gravity vectors
-    private var gravityX = 0f
-    private var gravityY = -9.8f
-    private var gravityZ = 0f
-    
     private var isInitialized = false
 
     // Real ARCore Session state
     private var session: Session? = null
     var isRealArCoreActive = false
+        private set
+
+    var arCoreErrorMessage: String? = null
         private set
 
     @Volatile
@@ -71,19 +49,26 @@ class DepthEstimator : SensorEventListener {
         return try {
             val availability = ArCoreApk.getInstance().checkAvailability(activity)
             if (!availability.isSupported) {
-                Log.i(TAG, "ARCore not supported on this device. Using sensor-based fallback.")
+                arCoreErrorMessage = "อุปกรณ์ไม่รองรับ ARCore (${availability.name})"
+                Log.i(TAG, "ARCore not supported: $arCoreErrorMessage")
                 return false
             }
             val installStatus = ArCoreApk.getInstance().requestInstall(activity, true)
-            installStatus == ArCoreApk.InstallStatus.INSTALLED
+            if (installStatus == ArCoreApk.InstallStatus.INSTALLED) {
+                true
+            } else {
+                arCoreErrorMessage = "ยังไม่ได้ติดตั้งหรือต้องการการอัปเดต Google Play Services for AR"
+                false
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "ARCore availability check failed: ${e.message}")
+            arCoreErrorMessage = "ตรวจสอบการติดตั้ง ARCore ล้มเหลว: ${e.message}"
+            Log.e(TAG, "ARCore availability check failed: ${e.message}", e)
             false
         }
     }
 
     /**
-     * Initialize native ARCore Session + accelerometer sensors.
+     * Initialize native ARCore Session.
      */
     fun initialize(activity: Activity) {
         if (isInitialized) return
@@ -97,31 +82,19 @@ class DepthEstimator : SensorEventListener {
                 config.focusMode = Config.FocusMode.AUTO
                 Log.i(TAG, "ARCore Depth API enabled in Session Configuration")
             } else {
-                Log.w(TAG, "ARCore Depth API is not supported on this session configuration.")
+                arCoreErrorMessage = "อุปกรณ์นี้ไม่รองรับ Depth API (Automatic Depth Mode)"
+                Log.w(TAG, arCoreErrorMessage!!)
             }
             session.configure(config)
             this.session = session
             this.isRealArCoreActive = true
+            isInitialized = true
             Log.i(TAG, "Native ARCore session initialized successfully.")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to create native ARCore session: ${e.message}. Falling back to sensors.", e)
+            arCoreErrorMessage = "ไม่สามารถสร้าง ARCore Session ได้: ${e.message}"
+            Log.e(TAG, "Failed to create native ARCore session", e)
             this.session = null
             this.isRealArCoreActive = false
-        }
-
-        activity.runOnUiThread {
-            try {
-                sensorManager = activity.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-                accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-                
-                accelerometer?.let {
-                    sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
-                    isInitialized = true
-                    Log.i(TAG, "Sensor-based fallback DepthEstimator initialized successfully on UI thread.")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to initialize sensors: ${e.message}", e)
-            }
         }
     }
 
@@ -169,7 +142,7 @@ class DepthEstimator : SensorEventListener {
 
     /**
      * Get depth (in meters) at a normalized screen coordinate.
-     * Uses real ARCore Depth API if active, or falls back to sensor-based pitch/tilt triangulation.
+     * Uses real ARCore Depth API if active, otherwise returns -1f (no mock fallback).
      */
     fun getDepthAtNormalizedPoint(nx: Float, ny: Float): Float {
         val frame = lastArCoreFrame
@@ -207,36 +180,7 @@ class DepthEstimator : SensorEventListener {
             }
         }
 
-        if (!isInitialized) return -1f
-
-        // typical height of device held in hand (meters)
-        val deviceHeight = 1.25f 
-
-        // Gravity vector points along Y in vertical layout, and shifts to Z when tilted down
-        val gY = gravityY
-        val gZ = gravityZ
-
-        // Safe check to avoid divide by zero or negative pitch
-        val absGy = abs(gY)
-        val absGz = abs(gZ)
-
-        val distance = if (absGz > 0.5f) {
-            // Triangulate distance to the floor intersection point
-            val est = deviceHeight * (absGy / absGz)
-            // Constrain distance to a realistic range [0.3m to 5.0m]
-            est.coerceIn(0.3f, 5.0f)
-        } else {
-            // Device is held vertical (looking straight ahead at walls/obstacles)
-            // Return a safe clear distance (e.g. 3.5m)
-            3.5f
-        }
-
-        // Add a small offset based on Y coordinate to simulate depth gradient
-        val verticalOffset = (0.5f - ny) * 1.5f
-        val finalDepth = (distance + verticalOffset).coerceIn(0.1f, 5.0f)
-        
-        Log.d(TAG, "Triangulated Fallback Depth: ${String.format("%.2f", finalDepth)}m (gY=${String.format("%.2f", gY)}, gZ=${String.format("%.2f", gZ)})")
-        return finalDepth
+        return -1f
     }
 
     /**
@@ -244,38 +188,18 @@ class DepthEstimator : SensorEventListener {
      */
     fun getDepthAtBox(box: RectF): Float {
         val cy = (box.top + box.bottom) / 2f
-        // Lower bounding box means the object is lower in frame, thus closer
         return getDepthAtNormalizedPoint(0.5f, cy)
     }
 
     /**
-     * Estimate distance using bounding box size heuristic when object details are present.
+     * No-op / fallback returns -1f (disabled mock heuristics).
      */
     fun estimateDistanceHeuristic(box: RectF, label: String): Float {
-        val boxHeight = box.bottom - box.top
-        if (boxHeight <= 0f) return 3.0f
-
-        val typicalHeight = when (label) {
-            "person"   -> 1.70f
-            "chair"    -> 0.90f
-            "car"      -> 1.50f
-            "dog"      -> 0.50f
-            "cat"      -> 0.30f
-            "bottle"   -> 0.25f
-            "couch"    -> 0.85f
-            "table"    -> 0.75f
-            else       -> 1.00f
-        }
-        val focalLength = 800f
-        val heuristic = (typicalHeight * focalLength / boxHeight).coerceIn(0.1f, 10f)
-        
-        // Blend heuristic and tilt estimate for better accuracy
-        val tiltDepth = getDepthAtBox(box)
-        return (heuristic * 0.6f + tiltDepth * 0.4f).coerceIn(0.2f, 5.0f)
+        return -1f
     }
 
     fun isDepthAvailable(): Boolean = synchronized(this) {
-        depthBuffer != null || isInitialized
+        depthBuffer != null
     }
 
     fun onResume() {
@@ -302,25 +226,8 @@ class DepthEstimator : SensorEventListener {
 
     fun getSession(): Session? = session
 
-    // ─── SensorEventListener ──────────────────────────────────────────────────
-
-    override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
-            // Low-pass filter to smooth gravity vectors
-            gravityX = gravityX * 0.9f + event.values[0] * 0.1f
-            gravityY = gravityY * 0.9f + event.values[1] * 0.1f
-            gravityZ = gravityZ * 0.9f + event.values[2] * 0.1f
-        }
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-
     fun release() {
-        try {
-            sensorManager?.unregisterListener(this)
-        } catch (ignored: Exception) {}
         isInitialized = false
-        
         synchronized(this) {
             try {
                 session?.close()

@@ -151,15 +151,13 @@ class DistancePipeline(
         val results = mutableListOf<DistanceResult>()
         for (obj in detected) {
             val arcoreDepth = depthEstimator.getDepthAtBox(obj.boundingBox)
-            val (distanceM, isReal) = when {
-                arcoreDepth > 0f -> Pair(arcoreDepth, true)
-                else -> Pair(depthEstimator.estimateDistanceHeuristic(obj.boundingBox, obj.label), false)
+            if (arcoreDepth > 0f) {
+                results.add(DistanceResult(
+                    label = obj.label, labelThai = obj.labelThai,
+                    distanceMeters = arcoreDepth, confidence = obj.confidence,
+                    boundingBox = obj.boundingBox, isDepthReal = true
+                ))
             }
-            results.add(DistanceResult(
-                label = obj.label, labelThai = obj.labelThai,
-                distanceMeters = distanceM, confidence = obj.confidence,
-                boundingBox = obj.boundingBox, isDepthReal = isReal
-            ))
         }
 
         results.sortBy { it.distanceMeters }
