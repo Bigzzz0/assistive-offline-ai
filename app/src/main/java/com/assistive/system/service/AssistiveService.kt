@@ -234,6 +234,20 @@ class AssistiveService : Service() {
         }
 
         when {
+            prompt.contains("วัดระยะ") || prompt.contains("ตรงกลาง") || prompt.contains("ระยะ") -> {
+                _serviceStatus.value = "คำสั่ง: วัดระยะกึ่งกลาง..."
+                hapticManager.vibrateGeneralInfo()
+                val centerDepth = distancePipeline?.depthEstimator?.getDepthAtNormalizedPoint(0.5f, 0.5f) ?: -1f
+                if (centerDepth > 0f) {
+                    val closestObstacle = distancePipeline?.lastDistanceResults?.firstOrNull { it.boundingBox.contains(0.5f, 0.5f) }
+                    val label = closestObstacle?.labelThai ?: "วัตถุตรงกลาง"
+                    val distStr = String.format(java.util.Locale.US, "%.1f", centerDepth)
+                    audioPipeline.speak("$label อยู่ห่างออกไป $distStr เมตร")
+                } else {
+                    val errMsg = distancePipeline?.depthEstimator?.arCoreErrorMessage ?: "ระบบไม่สามารถวัดระยะได้ในขณะนี้"
+                    audioPipeline.speak("ไม่สามารถวัดระยะตรงกลางได้ เนื่องจาก $errMsg")
+                }
+            }
             prompt.contains("อ่าน") -> {
                 enqueuePrompt("อ่านป้ายและข้อความภาษาไทยในภาพ")
                 _serviceStatus.value = "คำสั่ง: กำลังอ่านข้อความ..."

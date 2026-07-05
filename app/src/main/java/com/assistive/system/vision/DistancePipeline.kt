@@ -45,9 +45,11 @@ enum class AlertLevel { DANGER, WARNING, NEAR, CLEAR }
 class DistancePipeline(
     private val context: Context,
     private val objectDetector: ObjectDetector?,    // null = depth-only fallback mode
-    private val depthEstimator: DepthEstimator,
+    val depthEstimator: DepthEstimator,
     private val onDistanceUpdate: (List<DistanceResult>) -> Unit
 ) {
+    var lastDistanceResults: List<DistanceResult> = emptyList()
+        private set
     private val TAG = "DistancePipeline"
 
     // Alert thresholds
@@ -160,8 +162,23 @@ class DistancePipeline(
             }
         }
 
+        // Add center screen depth (0.5, 0.5) if not already covered by a bounding box
+        val centerDepth = depthEstimator.getDepthAtNormalizedPoint(0.5f, 0.5f)
+        if (centerDepth > 0f) {
+            val coversCenter = results.any { it.boundingBox.contains(0.5f, 0.5f) }
+            if (!coversCenter) {
+                results.add(DistanceResult(
+                    label = "center", labelThai = "ตรงกลางภาพ",
+                    distanceMeters = centerDepth, confidence = 1.0f,
+                    boundingBox = android.graphics.RectF(0.45f, 0.45f, 0.55f, 0.55f),
+                    isDepthReal = true
+                ))
+            }
+        }
+
         results.sortBy { it.distanceMeters }
         Log.d(TAG, "Distance results: ${results.joinToString { "${it.labelThai} ${String.format("%.1f", it.distanceMeters)}m" }}")
+        lastDistanceResults = results
         return results
     }
 
@@ -184,13 +201,18 @@ class DistancePipeline(
             }
         }
 
-        if (minDepth == Float.MAX_VALUE || minDepth <= 0f) return emptyList()
+        if (minDepth == Float.MAX_VALUE || minDepth <= 0f) {
+            lastDistanceResults = emptyList()
+            return emptyList()
+        }
 
-        return listOf(DistanceResult(
+        val resultsList = listOf(DistanceResult(
             label = "obstacle", labelThai = "สิ่งกีดขวาง",
             distanceMeters = minDepth, confidence = 1.0f,
             boundingBox = android.graphics.RectF(0.3f, 0.3f, 0.7f, 0.7f),
             isDepthReal = isReal
         ))
+        lastDistanceResults = resultsList
+        return resultsList
     }
 }

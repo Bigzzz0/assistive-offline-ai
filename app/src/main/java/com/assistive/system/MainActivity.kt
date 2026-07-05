@@ -84,6 +84,8 @@ class MainActivity : ComponentActivity() {
     private var depthEstimator: DepthEstimator? = null
     private var distancePipeline: DistancePipeline? = null
     private var isArInitialized by mutableStateOf(false)
+    private var isArActiveState by mutableStateOf(false)
+    private var glSurfaceView: GLSurfaceView? = null
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -323,10 +325,14 @@ class MainActivity : ComponentActivity() {
 
                 if (arcoreReady && depth.isRealArCoreActive) {
                     Log.i("MainActivity", "ARCore Depth API initialized")
+                    runOnUiThread {
+                        isArActiveState = true
+                    }
                 } else {
                     val errMsg = depth.arCoreErrorMessage ?: "อุปกรณ์ไม่รองรับหรือยังไม่ได้ติดตั้ง ARCore"
                     Log.w("MainActivity", "ARCore not available: $errMsg")
                     runOnUiThread {
+                        isArActiveState = false
                         assistiveService?.audioPipeline?.speak("คำเตือน ระบบวัดระยะด้วยเออาร์คอร์ไม่สามารถทำงานได้ เนื่องจาก $errMsg")
                     }
                 }
@@ -387,6 +393,8 @@ class MainActivity : ComponentActivity() {
         try { depthEstimator?.release() } catch (ignored: Exception) {}
         distancePipeline = null; objectDetector = null; depthEstimator = null
         isArInitialized = false
+        isArActiveState = false
+        glSurfaceView = null
         Log.i("MainActivity", "ARCore pipeline released")
     }
 
@@ -627,7 +635,7 @@ class MainActivity : ComponentActivity() {
                         contentDescription = "หน้าต่างกล้อง โหมดปัจจุบันคือ ${currentMode.speech}. แตะสองครั้งเพื่อเริ่มสแกน หรือปัดซ้ายขวาเพื่อเปลี่ยนโหมด"
                     }
             ) {
-                val arActive = isArInitialized && depthEstimator?.isRealArCoreActive == true
+                val arActive = isArActiveState
                 if (arActive) {
                     val session = depthEstimator?.getSession()
                     if (session != null) {
@@ -638,10 +646,33 @@ class MainActivity : ComponentActivity() {
                                     val renderer = ArCoreRenderer(this, session)
                                     setRenderer(renderer)
                                     renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+                                    glSurfaceView = this
+                                    onResume() // Start GL rendering loop immediately
                                 }
                             },
                             modifier = Modifier.fillMaxSize()
                         )
+                        
+                        // Dynamically bind GLSurfaceView to Activity's lifecycle events
+                        val lifecycle = LocalLifecycleOwner.current.lifecycle
+                        DisposableEffect(lifecycle) {
+                            val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                                when (event) {
+                                    androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                                        glSurfaceView?.onResume()
+                                    }
+                                    androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
+                                        glSurfaceView?.onPause()
+                                    }
+                                    else -> {}
+                                }
+                            }
+                            lifecycle.addObserver(observer)
+                            onDispose {
+                                lifecycle.removeObserver(observer)
+                                glSurfaceView = null
+                            }
+                        }
                     }
                 } else {
                     AndroidView(
@@ -859,32 +890,59 @@ class MainActivity : ComponentActivity() {
                             textAlign = TextAlign.Center
                         )
                     } else {
+                        val centerDistance = depthEstimator?.getDepthAtNormalizedPoint(0.5f, 0.5f) ?: -1f
+                        
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val alertIcon = when {
-                                obstacleDistance <= 0f -> "⚪"
-                                obstacleDistance < 0.8f -> "🔴"
-                                obstacleDistance < 1.5f -> "🟠"
-                                obstacleDistance < 3.0f -> "🟡"
-                                else -> "🟢"
+                            // Column 1: Center Point
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("🎯 ตรงกลางภาพ", color = Color.LightGray, fontSize = 12.sp)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                val centerColor = when {
+                                    centerDistance <= 0f -> Color.Gray
+                                    centerDistance < 0.8f -> Color(0xFFEF4444)
+                                    centerDistance < 1.5f -> Color(0xFFF59E0B)
+                                    else -> Color(0xFF10B981)
+                                }
+                                Text(
+                                    text = if (centerDistance > 0f) String.format(java.util.Locale.US, "%.1f ม.", centerDistance) else "N/A",
+                                    color = centerColor,
+                                    fontSize = 24.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
                             }
-                            Text(text = alertIcon, fontSize = 24.sp)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = if (obstacleDistance > 0f) String.format(java.util.Locale.US, "%.1f เมตร", obstacleDistance) else "0.0 เมตร",
-                                color = distanceColor,
-                                fontSize = 32.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
+                            
+                            // Vertical Divider
+                            Box(modifier = Modifier.width(1.dp).height(40.dp).background(Color.Gray.copy(alpha = 0.5f)))
+                            
+                            // Column 2: Closest Obstacle
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("⚠️ ใกล้ที่สุด", color = Color.LightGray, fontSize = 12.sp)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                val closestColor = when {
+                                    obstacleDistance <= 0f -> Color.Gray
+                                    obstacleDistance < 0.8f -> Color(0xFFEF4444)
+                                    obstacleDistance < 1.5f -> Color(0xFFF59E0B)
+                                    else -> Color(0xFF10B981)
+                                }
+                                Text(
+                                    text = if (obstacleDistance > 0f) String.format(java.util.Locale.US, "%.1f ม.", obstacleDistance) else "N/A",
+                                    color = closestColor,
+                                    fontSize = 24.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
                         }
+                        
                         if (closestObstacle != null && obstacleDistance > 0f) {
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "วัตถุที่ตรวจพบ: $obstacleLabel",
+                                text = "วัตถุที่ใกล้: $obstacleLabel",
                                 color = Color.White.copy(alpha = 0.8f),
-                                fontSize = 14.sp,
+                                fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium
                             )
                         }
