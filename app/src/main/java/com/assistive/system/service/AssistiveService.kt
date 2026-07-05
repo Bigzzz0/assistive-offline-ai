@@ -321,10 +321,30 @@ class AssistiveService : Service() {
                 // Pause microphone listening thread during VLM inference to avoid CPU/thread contention
                 audioPipeline.pauseListening()
 
+                // Sensor-fusion: Append exact depth/distance values of detected objects and the center point to the VLM prompt to make descriptions highly accurate
+                val distanceInfo = StringBuilder()
+                val pipeline = distancePipeline
+                if (pipeline != null) {
+                    val results = pipeline.lastDistanceResults
+                    if (results.isNotEmpty()) {
+                        distanceInfo.append("\n\nข้อมูลความลึก/ระยะห่างจริงจากเซ็นเซอร์ ARCore เพื่อใช้ประกอบการอธิบายภาพ:")
+                        for (res in results) {
+                            if (res.label == "center") {
+                                distanceInfo.append("\n- ระยะกึ่งกลางกล้อง (ตรงหน้าตรงๆ): ${String.format(java.util.Locale.US, "%.1f", res.distanceMeters)} เมตร")
+                            } else if (res.label == "obstacle") {
+                                distanceInfo.append("\n- มีสิ่งกีดขวางไม่ทราบชนิดห่างออกไป: ${String.format(java.util.Locale.US, "%.1f", res.distanceMeters)} เมตร")
+                            } else {
+                                distanceInfo.append("\n- ${res.labelThai}: ห่างออกไป ${String.format(java.util.Locale.US, "%.1f", res.distanceMeters)} เมตร")
+                            }
+                        }
+                    }
+                }
+                val finalPrompt = task.prompt + distanceInfo.toString()
+
                 try {
                     // Impose 45 seconds timeout to prevent infinite loading freezes on stalled inferences
                     kotlinx.coroutines.withTimeout(45000L) {
-                        inferenceEngine.analyzeImageStream(task.imageBytes, task.prompt).collect { token ->
+                        inferenceEngine.analyzeImageStream(task.imageBytes, finalPrompt).collect { token ->
                             fullResponse.append(token)
                             _inferenceOutput.value = fullResponse.toString()
                         }

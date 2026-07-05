@@ -221,12 +221,36 @@ class DepthEstimator {
     }
 
     /**
-     * Get the depth at the center of a normalized bounding box.
+     * Get the depth at the closest point of a normalized bounding box (using a cross sampling pattern).
      */
     fun getDepthAtBox(box: RectF): Float {
         val cx = (box.left + box.right) / 2f
         val cy = (box.top + box.bottom) / 2f
-        return getDepthAtNormalizedPoint(cx, cy)
+        val w = box.width()
+        val h = box.height()
+        
+        // Sample center, and 4 points on a cross pattern (25% inset from boundaries)
+        val points = listOf(
+            cx to cy,
+            (cx - w / 4f).coerceIn(0.01f, 0.99f) to cy,
+            (cx + w / 4f).coerceIn(0.01f, 0.99f) to cy,
+            cx to (cy - h / 4f).coerceIn(0.01f, 0.99f),
+            cx to (cy + h / 4f).coerceIn(0.01f, 0.99f)
+        )
+        
+        val depths = mutableListOf<Float>()
+        for ((px, py) in points) {
+            val d = getDepthAtNormalizedPoint(px, py)
+            if (d > 0f) {
+                depths.add(d)
+            }
+        }
+        
+        return if (depths.isNotEmpty()) {
+            depths.minOrNull() ?: -1f
+        } else {
+            -1f
+        }
     }
 
     /**
