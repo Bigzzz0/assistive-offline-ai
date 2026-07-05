@@ -29,9 +29,6 @@ class DepthEstimator {
     var arCoreErrorMessage: String? = null
         private set
 
-    @Volatile
-    private var lastArCoreFrame: Frame? = null
-
     private var depthWidth = 0
     private var depthHeight = 0
     private var depthRowStride = 0
@@ -39,6 +36,15 @@ class DepthEstimator {
     
     @Volatile
     private var depthBuffer: java.nio.ShortBuffer? = null
+
+    // Thread-safe depth request queue for GL thread processing
+    data class DepthRequest(
+        val nx: Float,
+        val ny: Float,
+        val callback: (Float) -> Unit
+    )
+
+    private val pendingDepthRequests = java.util.concurrent.ConcurrentLinkedQueue<DepthRequest>()
 
     // ─── Public API ──────────────────────────────────────────────────────────
 
@@ -99,7 +105,7 @@ class DepthEstimator {
     }
 
     /**
-     * No-op since frame updates are submitted directly via updateArCoreFrame.
+     * No-op since frame updates are submitted directly via updateDepthBuffer.
      */
     fun updateFrame() {
     }
@@ -117,7 +123,6 @@ class DepthEstimator {
         pixelStride: Int
     ) {
         synchronized(this) {
-            lastArCoreFrame = frame
             depthWidth = width
             depthHeight = height
             depthRowStride = rowStride
@@ -127,16 +132,45 @@ class DepthEstimator {
     }
 
     /**
-     * Get depth (in meters) at a normalized screen coordinate.
-     * Uses real ARCore Depth API if active, otherwise returns -1f (no mock fallback).
+     * Submits a coordinate transform and depth query to be processed on the GL thread.
+     * Safely blocks the calling thread for up to 50ms.
      */
     fun getDepthAtNormalizedPoint(nx: Float, ny: Float): Float {
-        val frame = lastArCoreFrame
+        if (!isRealArCoreActive) return -1f
+
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var result = -1f
+
+        pendingDepthRequests.add(DepthRequest(nx, ny) { depth ->
+            result = depth
+            latch.countDown()
+        })
+
+        try {
+            latch.await(50L, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: Exception) {
+            Log.w(TAG, "Depth query latch timeout for point ($nx, $ny)")
+        }
+
+        return result
+    }
+
+    /**
+     * Process all queued depth queries synchronously on the GL thread using the current live frame.
+     */
+    fun processPendingDepthRequests(frame: Frame) {
         val buffer = synchronized(this) { depthBuffer }
         
-        if (frame != null && buffer != null) {
+        while (true) {
+            val request = pendingDepthRequests.poll() ?: break
+            
+            if (buffer == null) {
+                request.callback(-1f)
+                continue
+            }
+
             try {
-                val viewCoords = floatArrayOf(nx, ny)
+                val viewCoords = floatArrayOf(request.nx, request.ny)
                 val cpuCoords = FloatArray(2)
                 frame.transformCoordinates2d(
                     Coordinates2d.VIEW_NORMALIZED,
@@ -175,15 +209,15 @@ class DepthEstimator {
                 if (depthValues.isNotEmpty()) {
                     depthValues.sort()
                     val medianDepth = depthValues[depthValues.size / 2]
-                    Log.d(TAG, "Windowed ARCore Depth (median): ${String.format("%.2f", medianDepth)}m (sampled ${depthValues.size} points) around ($cx, $cy)")
-                    return medianDepth.coerceIn(0.1f, 5.0f)
+                    request.callback(medianDepth.coerceIn(0.1f, 5.0f))
+                } else {
+                    request.callback(-1f)
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to query ARCore depth: ${e.message}")
+                Log.w(TAG, "Failed to query ARCore depth on GL thread: ${e.message}")
+                request.callback(-1f)
             }
         }
-
-        return -1f
     }
 
     /**

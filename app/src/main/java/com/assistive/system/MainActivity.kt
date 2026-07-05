@@ -264,6 +264,7 @@ class MainActivity : ComponentActivity() {
                             .asShortBuffer()
                             
                         depthEstimator?.updateDepthBuffer(frame, depthBuffer, width, height, rowStride, pixelStride)
+                        depthEstimator?.processPendingDepthRequests(frame)
                     } catch (e: Exception) {
                         Log.w("ArCoreRenderer", "Failed to extract depth buffer: ${e.message}")
                     } finally {
@@ -271,6 +272,7 @@ class MainActivity : ComponentActivity() {
                     }
                 } else {
                     depthEstimator?.updateDepthBuffer(frame, null, 0, 0, 0, 0)
+                    depthEstimator?.processPendingDepthRequests(frame)
                 }
                 
                 val now = System.currentTimeMillis()
@@ -662,14 +664,16 @@ class MainActivity : ComponentActivity() {
                                 // Tap to measure exact distance at the tapped coordinate
                                 val nx = offset.x / size.width
                                 val ny = offset.y / size.height
-                                val tappedDepth = depthEstimator?.getDepthAtNormalizedPoint(nx, ny) ?: -1f
-                                if (tappedDepth > 0f) {
-                                    assistiveService?.hapticManager?.vibrateGeneralInfo()
-                                    val distStr = String.format(java.util.Locale.US, "%.1f", tappedDepth)
-                                    assistiveService?.audioPipeline?.speak("ระยะ $distStr เมตร")
-                                } else {
-                                    assistiveService?.hapticManager?.vibrateWarning()
-                                    assistiveService?.audioPipeline?.speak("ไม่สามารถวัดระยะจุดนี้ได้")
+                                cameraExecutor.execute {
+                                    val tappedDepth = depthEstimator?.getDepthAtNormalizedPoint(nx, ny) ?: -1f
+                                    if (tappedDepth > 0f) {
+                                        assistiveService?.hapticManager?.vibrateGeneralInfo()
+                                        val distStr = String.format(java.util.Locale.US, "%.1f", tappedDepth)
+                                        assistiveService?.audioPipeline?.speak("ระยะ $distStr เมตร")
+                                    } else {
+                                        assistiveService?.hapticManager?.vibrateWarning()
+                                        assistiveService?.audioPipeline?.speak("ไม่สามารถวัดระยะจุดนี้ได้")
+                                    }
                                 }
                             }
                         )
@@ -774,13 +778,15 @@ class MainActivity : ComponentActivity() {
                     Button(
                         onClick = {
                             assistiveService?.hapticManager?.vibrateGeneralInfo()
-                            val centerDepth = depthEstimator?.getDepthAtNormalizedPoint(0.5f, 0.5f) ?: -1f
-                            if (centerDepth > 0f) {
-                                val distStr = String.format(java.util.Locale.US, "%.1f", centerDepth)
-                                assistiveService?.audioPipeline?.speak("ระยะตรงกลาง $distStr เมตร")
-                            } else {
-                                val errMsg = depthEstimator?.arCoreErrorMessage ?: "ระบบไม่สามารถวัดระยะได้ในขณะนี้"
-                                assistiveService?.audioPipeline?.speak("ไม่สามารถวัดระยะตรงกลางได้ เนื่องจาก $errMsg")
+                            cameraExecutor.execute {
+                                val centerDepth = depthEstimator?.getDepthAtNormalizedPoint(0.5f, 0.5f) ?: -1f
+                                if (centerDepth > 0f) {
+                                    val distStr = String.format(java.util.Locale.US, "%.1f", centerDepth)
+                                    assistiveService?.audioPipeline?.speak("ระยะตรงกลาง $distStr เมตร")
+                                } else {
+                                    val errMsg = depthEstimator?.arCoreErrorMessage ?: "ระบบไม่สามารถวัดระยะได้ในขณะนี้"
+                                    assistiveService?.audioPipeline?.speak("ไม่สามารถวัดระยะตรงกลางได้ เนื่องจาก $errMsg")
+                                }
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
