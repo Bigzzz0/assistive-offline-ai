@@ -241,9 +241,13 @@ class MainActivity : ComponentActivity() {
                 backgroundRenderer.draw(frame)
                 
                 val depthImage = try {
-                    frame.acquireDepthImage16Bits()
+                    frame.acquireRawDepthImage16Bits()
                 } catch (e: Exception) {
-                    null
+                    try {
+                        frame.acquireDepthImage16Bits()
+                    } catch (e2: Exception) {
+                        null
+                    }
                 }
                 
                 if (depthImage != null) {
