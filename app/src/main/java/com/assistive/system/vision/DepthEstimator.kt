@@ -162,18 +162,35 @@ class DepthEstimator {
                 val u = cpuCoords[0]
                 val v = cpuCoords[1]
                 
-                val x = (u * depthWidth).toInt().coerceIn(0, depthWidth - 1)
-                val y = (v * depthHeight).toInt().coerceIn(0, depthHeight - 1)
+                val cx = (u * depthWidth).toInt().coerceIn(0, depthWidth - 1)
+                val cy = (v * depthHeight).toInt().coerceIn(0, depthHeight - 1)
                 
-                val byteOffset = y * depthRowStride + x * depthPixelStride
-                val shortOffset = byteOffset / 2
-                if (shortOffset in 0 until buffer.limit()) {
-                    val depthMillimeters = buffer.get(shortOffset).toInt() and 0xFFFF
-                    if (depthMillimeters > 0) {
-                        val depthMeters = depthMillimeters / 1000.0f
-                        Log.d(TAG, "Real ARCore Depth: ${String.format("%.2f", depthMeters)}m at ($x, $y) mapped from ($nx, $ny)")
-                        return depthMeters.coerceIn(0.1f, 5.0f)
+                // Sample 5x5 window to filter noise and invalid pixels
+                val depthValues = mutableListOf<Float>()
+                val radius = 2
+                
+                for (dy in -radius..radius) {
+                    for (dx in -radius..radius) {
+                        val x = (cx + dx).coerceIn(0, depthWidth - 1)
+                        val y = (cy + dy).coerceIn(0, depthHeight - 1)
+                        
+                        val byteOffset = y * depthRowStride + x * depthPixelStride
+                        val shortOffset = byteOffset / 2
+                        if (shortOffset in 0 until buffer.limit()) {
+                            val depthMillimeters = buffer.get(shortOffset).toInt() and 0xFFFF
+                            if (depthMillimeters > 0) {
+                                val depthMeters = depthMillimeters / 1000.0f
+                                depthValues.add(depthMeters)
+                            }
+                        }
                     }
+                }
+                
+                if (depthValues.isNotEmpty()) {
+                    depthValues.sort()
+                    val medianDepth = depthValues[depthValues.size / 2]
+                    Log.d(TAG, "Windowed ARCore Depth (median): ${String.format("%.2f", medianDepth)}m (sampled ${depthValues.size} points) around ($cx, $cy)")
+                    return medianDepth.coerceIn(0.1f, 5.0f)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to query ARCore depth: ${e.message}")

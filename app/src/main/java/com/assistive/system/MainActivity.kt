@@ -314,6 +314,8 @@ class MainActivity : ComponentActivity() {
                         arcoreReady = depth.checkAndInstallArCore(this@MainActivity)
                         if (arcoreReady) {
                             depth.initialize(this@MainActivity)
+                            // Resume the ARCore session immediately to prevent race conditions where Activity's onResume has already executed
+                            depth.onResume()
                         }
                     } catch (e: Exception) {
                         Log.e("MainActivity", "ARCore UI thread check failed: ${e.message}")
@@ -626,8 +628,19 @@ class MainActivity : ComponentActivity() {
                                     assistiveService?.hapticManager?.vibrateWarning()
                                 }
                             },
-                            onTap = {
-                                announceMode(currentMode)
+                            onTap = { offset ->
+                                // Tap to measure exact distance at the tapped coordinate
+                                val nx = offset.x / size.width
+                                val ny = offset.y / size.height
+                                val tappedDepth = depthEstimator?.getDepthAtNormalizedPoint(nx, ny) ?: -1f
+                                if (tappedDepth > 0f) {
+                                    assistiveService?.hapticManager?.vibrateGeneralInfo()
+                                    val distStr = String.format(java.util.Locale.US, "%.1f", tappedDepth)
+                                    assistiveService?.audioPipeline?.speak("ระยะ $distStr เมตร")
+                                } else {
+                                    assistiveService?.hapticManager?.vibrateWarning()
+                                    assistiveService?.audioPipeline?.speak("ไม่สามารถวัดระยะจุดนี้ได้")
+                                }
                             }
                         )
                     }
@@ -721,16 +734,36 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxSize()
                     )
                 }
-                // "Tap to analyze" hint overlay
-                Box(
+                // Interactive controls overlay
+                Column(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(8.dp)
+                        .padding(bottom = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    Button(
+                        onClick = {
+                            assistiveService?.hapticManager?.vibrateGeneralInfo()
+                            val centerDepth = depthEstimator?.getDepthAtNormalizedPoint(0.5f, 0.5f) ?: -1f
+                            if (centerDepth > 0f) {
+                                val distStr = String.format(java.util.Locale.US, "%.1f", centerDepth)
+                                assistiveService?.audioPipeline?.speak("ระยะตรงกลาง $distStr เมตร")
+                            } else {
+                                val errMsg = depthEstimator?.arCoreErrorMessage ?: "ระบบไม่สามารถวัดระยะได้ในขณะนี้"
+                                assistiveService?.audioPipeline?.speak("ไม่สามารถวัดระยะตรงกลางได้ เนื่องจาก $errMsg")
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    ) {
+                        Text("🎯 แตะเพื่อวัดระยะตรงกลาง", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                    
                     Text(
-                        text = "แตะเพื่อวิเคราะห์ภาพ",
+                        text = "แตะเพื่อวัดระยะจุดนั้นๆ | ดับเบิ้ลแตะเพื่อประมวลผลคำสั่ง",
                         color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         modifier = Modifier
                             .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
                             .padding(horizontal = 8.dp, vertical = 4.dp)
