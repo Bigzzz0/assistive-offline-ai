@@ -165,8 +165,8 @@ class VisionPipeline(
 
         distancePipeline?.let { pipeline ->
             try {
-                // Submit a copy — pipeline is async so it needs its own memory
-                pipeline.submitFrame(rawBitmap.copy(rawBitmap.config, false))
+                // Submit raw bitmap directly — pipeline copies pixels under static lock
+                pipeline.submitFrame(rawBitmap)
             } catch (e: Exception) {
                 Log.w("VisionPipeline", "DistancePipeline submit failed: ${e.message}")
             }
@@ -264,7 +264,7 @@ class VisionPipeline(
 
         distancePipeline?.let { pipeline ->
             try {
-                pipeline.submitFrame(rawBitmap.copy(rawBitmap.config, false))
+                pipeline.submitFrame(rawBitmap)
             } catch (e: Exception) {
                 Log.w("VisionPipeline", "DistancePipeline submit failed: ${e.message}")
             }

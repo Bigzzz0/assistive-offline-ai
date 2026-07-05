@@ -33,10 +33,10 @@ object OcrPostValidator {
         val phoneMatcher = phonePattern.matcher(ocrText)
         val verifiedPhones = mutableListOf<String>()
         while (phoneMatcher.find()) {
-            val fullMatch = phoneMatcher.group(0)
-            val part1 = phoneMatcher.group(1)
-            val part2 = phoneMatcher.group(2)
-            val part3 = phoneMatcher.group(3)
+            val fullMatch = phoneMatcher.group(0) ?: ""
+            val part1 = phoneMatcher.group(1) ?: ""
+            val part2 = phoneMatcher.group(2) ?: ""
+            val part3 = phoneMatcher.group(3) ?: ""
             
             // Normalize spacing/dashes for screen readers
             val normalizedPhone = "$part1-$part2-$part3"
@@ -50,7 +50,7 @@ object OcrPostValidator {
         val postalMatcher = postalCodePattern.matcher(ocrText)
         val verifiedPostcodes = mutableListOf<String>()
         while (postalMatcher.find()) {
-            val postcode = postalMatcher.group(1)
+            val postcode = postalMatcher.group(1) ?: ""
             verifiedPostcodes.add(postcode)
         }
 
@@ -58,7 +58,7 @@ object OcrPostValidator {
         val emailMatcher = emailPattern.matcher(ocrText)
         val verifiedEmails = mutableListOf<String>()
         while (emailMatcher.find()) {
-            val email = emailMatcher.group(0)
+            val email = emailMatcher.group(0) ?: ""
             verifiedEmails.add(email)
         }
 

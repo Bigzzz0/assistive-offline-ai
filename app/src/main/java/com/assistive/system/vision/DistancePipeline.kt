@@ -68,17 +68,29 @@ class DistancePipeline(
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var processingJob: Job? = null
-    private var latestBitmap: Bitmap? = null
     private var isRunning = false
+
+    // Pre-allocated static frame buffer for zero-allocation copy
+    private var pipelineBitmap: Bitmap? = null
+    private var pipelineCanvas: android.graphics.Canvas? = null
+    private val bitmapLock = Any()
+    private var hasNewFrame = false
 
     // ─── Public API ──────────────────────────────────────────────────────────
 
     /**
      * Submit the latest camera frame for processing.
-     * Thread-safe; called from the camera frame callback.
+     * Copies the pixel data instantly under a <1ms lock so caller can recycle the source.
      */
     fun submitFrame(bitmap: Bitmap) {
-        latestBitmap = bitmap
+        synchronized(bitmapLock) {
+            val target = pipelineBitmap ?: Bitmap.createBitmap(bitmap.width, bitmap.height, bitmap.config).also {
+                pipelineBitmap = it
+                pipelineCanvas = android.graphics.Canvas(it)
+            }
+            pipelineCanvas?.drawBitmap(bitmap, 0f, 0f, null)
+            hasNewFrame = true
+        }
     }
 
     /**
@@ -98,15 +110,21 @@ class DistancePipeline(
                     // Always tick ARCore to get the latest depth frame
                     depthEstimator.updateFrame()
 
-                    val bitmap = latestBitmap
-                    val results = if (bitmap != null && !bitmap.isRecycled) {
-                        processFrame(bitmap)
-                    } else {
-                        // No camera bitmap yet — still run depth-only sampling
+                    val results = if (objectDetector == null) {
                         depthOnlyFallback()
+                    } else {
+                        synchronized(bitmapLock) {
+                            val bitmap = pipelineBitmap
+                            if (bitmap != null && hasNewFrame) {
+                                hasNewFrame = false
+                                processFrame(bitmap)
+                            } else {
+                                null
+                            }
+                        }
                     }
 
-                    if (results.isNotEmpty()) {
+                    if (results != null && results.isNotEmpty()) {
                         onDistanceUpdate(results)
                     }
                 } catch (e: Exception) {
@@ -124,6 +142,11 @@ class DistancePipeline(
         processingJob?.cancel()
         processingJob = null
         isRunning = false
+        synchronized(bitmapLock) {
+            pipelineBitmap?.recycle()
+            pipelineBitmap = null
+            pipelineCanvas = null
+        }
         Log.i(TAG, "DistancePipeline stopped")
     }
 
@@ -146,8 +169,8 @@ class DistancePipeline(
     // ─── Private processing ──────────────────────────────────────────────────
 
     private fun processFrame(bitmap: Bitmap): List<DistanceResult> {
-        // 1. Run object detection (may return empty if model not loaded)
-        val detected = objectDetector?.detect(bitmap) ?: emptyList()
+        // 1. Run object detection using the synchronized drawBitmap lock inside ObjectDetector
+        val detected = objectDetector?.detect(bitmap, bitmapLock) ?: emptyList()
 
         // NOTE: depthEstimator.updateFrame() is called by the main loop before processFrame()
 

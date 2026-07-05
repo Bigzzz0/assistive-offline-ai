@@ -148,15 +148,17 @@ class ObjectDetector(private val context: Context) {
      * Run inference on a camera frame bitmap.
      * @return List of detected objects above confidence threshold after NMS
      */
-    fun detect(bitmap: Bitmap): List<DetectedObject> {
+    fun detect(bitmap: Bitmap, lock: Any): List<DetectedObject> {
         val interp = interpreter ?: return emptyList()
 
         return try {
             val targetBitmap = scaledBitmap ?: Bitmap.createBitmap(INPUT_SIZE, INPUT_SIZE, Bitmap.Config.ARGB_8888).also { scaledBitmap = it }
             val targetCanvas = canvas ?: android.graphics.Canvas(targetBitmap).also { canvas = it }
             
-            // Scale and draw input bitmap in-place
-            targetCanvas.drawBitmap(bitmap, null, RectF(0f, 0f, INPUT_SIZE.toFloat(), INPUT_SIZE.toFloat()), null)
+            // Scale and draw input bitmap in-place inside the synchronized block (<1ms)
+            synchronized(lock) {
+                targetCanvas.drawBitmap(bitmap, null, RectF(0f, 0f, INPUT_SIZE.toFloat(), INPUT_SIZE.toFloat()), null)
+            }
             
             val buffer = bitmapToByteBuffer(targetBitmap)
 
