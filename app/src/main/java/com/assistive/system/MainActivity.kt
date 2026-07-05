@@ -245,7 +245,33 @@ class MainActivity : ComponentActivity() {
                 } catch (e: Exception) {
                     null
                 }
-                depthEstimator?.updateArCoreFrame(frame, depthImage)
+                
+                if (depthImage != null) {
+                    try {
+                        val width = depthImage.width
+                        val height = depthImage.height
+                        val plane = depthImage.planes[0]
+                        val rowStride = plane.rowStride
+                        val pixelStride = plane.pixelStride
+                        
+                        val sourceBuffer = plane.buffer.order(java.nio.ByteOrder.nativeOrder())
+                        val capacity = sourceBuffer.remaining()
+                        val targetBytes = ByteArray(capacity)
+                        sourceBuffer.get(targetBytes)
+                        
+                        val depthBuffer = java.nio.ByteBuffer.wrap(targetBytes)
+                            .order(java.nio.ByteOrder.nativeOrder())
+                            .asShortBuffer()
+                            
+                        depthEstimator?.updateDepthBuffer(frame, depthBuffer, width, height, rowStride, pixelStride)
+                    } catch (e: Exception) {
+                        Log.w("ArCoreRenderer", "Failed to extract depth buffer: ${e.message}")
+                    } finally {
+                        depthImage.close()
+                    }
+                } else {
+                    depthEstimator?.updateDepthBuffer(frame, null, 0, 0, 0, 0)
+                }
                 
                 val now = System.currentTimeMillis()
                 if (now - lastProcessedTime >= 200L) {
@@ -256,15 +282,19 @@ class MainActivity : ComponentActivity() {
                         null
                     }
                     if (cameraImage != null) {
-                        cameraExecutor.execute {
-                            try {
-                                val bitmap = cameraImage.toBitmap()
-                                visionPipeline?.processBitmapFromArCore(bitmap)
-                            } catch (e: Exception) {
-                                Log.w("ArCoreRenderer", "Failed to process ARCore frame: ${e.message}")
-                            } finally {
-                                cameraImage.close()
+                        try {
+                            val bitmap = cameraImage.toBitmap()
+                            cameraExecutor.execute {
+                                try {
+                                    visionPipeline?.processBitmapFromArCore(bitmap)
+                                } catch (e: Exception) {
+                                    Log.w("ArCoreRenderer", "Failed to process ARCore frame: ${e.message}")
+                                }
                             }
+                        } catch (e: Exception) {
+                            Log.w("ArCoreRenderer", "Failed to convert camera frame to bitmap: ${e.message}")
+                        } finally {
+                            cameraImage.close()
                         }
                     }
                 }

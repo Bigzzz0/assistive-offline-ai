@@ -108,35 +108,21 @@ class DepthEstimator {
      * Copy the current depth image contents to a thread-safe short buffer.
      * Invoked from the OpenGL rendering thread to prevent native leaks.
      */
-    fun updateArCoreFrame(frame: Frame, depthImage: android.media.Image?) {
+    fun updateDepthBuffer(
+        frame: Frame,
+        buffer: java.nio.ShortBuffer?,
+        width: Int,
+        height: Int,
+        rowStride: Int,
+        pixelStride: Int
+    ) {
         synchronized(this) {
             lastArCoreFrame = frame
-            if (depthImage != null) {
-                try {
-                    depthWidth = depthImage.width
-                    depthHeight = depthImage.height
-                    
-                    val plane = depthImage.planes[0]
-                    depthRowStride = plane.rowStride
-                    depthPixelStride = plane.pixelStride
-                    
-                    val sourceBuffer = plane.buffer.order(java.nio.ByteOrder.nativeOrder())
-                    val capacity = sourceBuffer.remaining()
-                    val targetBytes = ByteArray(capacity)
-                    sourceBuffer.get(targetBytes)
-                    
-                    depthBuffer = java.nio.ByteBuffer.wrap(targetBytes)
-                        .order(java.nio.ByteOrder.nativeOrder())
-                        .asShortBuffer()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error copying depth image: ${e.message}")
-                    depthBuffer = null
-                } finally {
-                    depthImage.close()
-                }
-            } else {
-                depthBuffer = null
-            }
+            depthWidth = width
+            depthHeight = height
+            depthRowStride = rowStride
+            depthPixelStride = pixelStride
+            depthBuffer = buffer
         }
     }
 
@@ -204,8 +190,9 @@ class DepthEstimator {
      * Get the depth at the center of a normalized bounding box.
      */
     fun getDepthAtBox(box: RectF): Float {
+        val cx = (box.left + box.right) / 2f
         val cy = (box.top + box.bottom) / 2f
-        return getDepthAtNormalizedPoint(0.5f, cy)
+        return getDepthAtNormalizedPoint(cx, cy)
     }
 
     /**
