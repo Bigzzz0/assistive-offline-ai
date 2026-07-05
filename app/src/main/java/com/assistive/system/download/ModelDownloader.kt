@@ -113,22 +113,25 @@ object ModelDownloader {
 
             val inputStream = connection.inputStream
             val outputStream = FileOutputStream(tempFile, isResume)
-
             var bytesDownloaded = startByte
-            val buffer = ByteArray(BUFFER_SIZE)
-            var bytesRead: Int
 
-            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                outputStream.write(buffer, 0, bytesRead)
-                bytesDownloaded += bytesRead
-                val progress = if (totalBytes > 0) bytesDownloaded.toFloat() / totalBytes else 0f
-                emit(DownloadProgress(displayName, bytesDownloaded, totalBytes, progress))
+            try {
+                val buffer = ByteArray(BUFFER_SIZE)
+                var bytesRead: Int
+
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    outputStream.write(buffer, 0, bytesRead)
+                    bytesDownloaded += bytesRead
+                    val progress = if (totalBytes > 0) bytesDownloaded.toFloat() / totalBytes else 0f
+                    emit(DownloadProgress(displayName, bytesDownloaded, totalBytes, progress))
+                }
+
+                outputStream.flush()
+            } finally {
+                try { outputStream.close() } catch (ignored: Exception) {}
+                try { inputStream.close() } catch (ignored: Exception) {}
+                try { connection.disconnect() } catch (ignored: Exception) {}
             }
-
-            outputStream.flush()
-            outputStream.close()
-            inputStream.close()
-            connection.disconnect()
 
             // Rename temp → final file
             destFile.parentFile?.mkdirs()

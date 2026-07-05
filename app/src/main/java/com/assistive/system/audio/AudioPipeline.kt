@@ -212,18 +212,21 @@ class AudioPipeline(
                             if (silenceFrames >= maxSilenceFrames) {
                                 if (audioDataSize > 8000) { // At least 0.5 seconds of audio
                                     val stream = rec.createStream()
-                                    val activeSamples = FloatArray(audioDataSize)
-                                    System.arraycopy(audioDataBuffer, 0, activeSamples, 0, audioDataSize)
-                                    stream.acceptWaveform(activeSamples, sampleRate)
-                                    rec.decode(stream)
-                                    val text = rec.getResult(stream).text.trim().lowercase()
-                                    if (text.isNotEmpty()) {
-                                        Log.i("AudioPipeline", "ASR recognized: '$text'")
-                                        if (matchKeyword(text)) {
-                                            onKeywordDetected(text)
+                                    try {
+                                        val activeSamples = FloatArray(audioDataSize)
+                                        System.arraycopy(audioDataBuffer, 0, activeSamples, 0, audioDataSize)
+                                        stream.acceptWaveform(activeSamples, sampleRate)
+                                        rec.decode(stream)
+                                        val text = rec.getResult(stream).text.trim().lowercase()
+                                        if (text.isNotEmpty()) {
+                                            Log.i("AudioPipeline", "ASR recognized: '$text'")
+                                            if (matchKeyword(text)) {
+                                                onKeywordDetected(text)
+                                            }
                                         }
+                                    } finally {
+                                        stream.release()
                                     }
-                                    stream.release()
                                 }
                                 // Reset for next utterance
                                 audioDataSize = 0

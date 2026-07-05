@@ -102,7 +102,7 @@ class AssistiveService : Service() {
 
             val isVlmReal = !inferenceEngine.isMockMode()
             val isAsrReal = audioPipeline.isAsrReady()
-            performanceMonitor.updateVlmMode(isVlmReal)
+            performanceMonitor.updateVlmMode(isVlmReal, inferenceEngine.getActiveBackend())
             performanceMonitor.updateAsrMode(isAsrReal)
             performanceMonitor.startBatteryTracking()
 
@@ -149,10 +149,19 @@ class AssistiveService : Service() {
         val prompt = text.lowercase()
         Log.i("AssistiveService", "Voice Command received: $prompt")
         
+        if (prompt.contains("หยุด")) {
+            cancelCurrentAnalysis()
+            return
+        }
+
+        if (!inferenceEngine.isInitialized()) {
+            Log.w("AssistiveService", "Ignoring command because InferenceEngine is not initialized: $prompt")
+            audioPipeline.speak("ระบบยังไม่พร้อมใช้งาน โมเดลกำลังโหลด")
+            hapticManager.vibrateWarning()
+            return
+        }
+
         when {
-            prompt.contains("หยุด") -> {
-                cancelCurrentAnalysis()
-            }
             prompt.contains("อ่าน") -> {
                 enqueuePrompt("อ่านป้ายและข้อความภาษาไทยในภาพ")
                 _serviceStatus.value = "คำสั่ง: กำลังอ่านข้อความ..."
@@ -209,12 +218,6 @@ class AssistiveService : Service() {
         isAnalyzing = true
 
         try {
-            // Recycle old bitmap to free native memory immediately and avoid GC spikes
-            _currentlyAnalyzingBitmap.value?.let { oldBitmap ->
-                if (!oldBitmap.isRecycled) {
-                    oldBitmap.recycle()
-                }
-            }
             val bitmap = BitmapFactory.decodeByteArray(task.imageBytes, 0, task.imageBytes.size)
             _currentlyAnalyzingBitmap.value = bitmap
         } catch (e: Exception) {
@@ -229,45 +232,20 @@ class AssistiveService : Service() {
                 val fullResponse = StringBuilder()
                 val startTime = System.currentTimeMillis()
 
-            // Pause microphone listening thread during VLM inference to avoid CPU/thread contention
-            audioPipeline.pauseListening()
+                // Pause microphone listening thread during VLM inference to avoid CPU/thread contention
+                audioPipeline.pauseListening()
 
-            try {
-                inferenceEngine.analyzeImageStream(task.imageBytes, task.prompt).collect { token ->
-                    fullResponse.append(token)
-                    _inferenceOutput.value = fullResponse.toString()
-                }
-            } finally {
-                // Resume ASR listening thread
-                audioPipeline.resumeListening()
-            }
-
-            val latencyMs = System.currentTimeMillis() - startTime
-            val tokenCount = fullResponse.split(" ").size
-            performanceMonitor.recordInference(latencyMs, tokenCount)
-            performanceMonitor.refreshMemoryUsage()
-            performanceMonitor.refreshTemperature()
-            performanceMonitor.refreshBatteryDrain()
-
-            val finalOutput = fullResponse.toString()
-            val validatedOutput = if (task.prompt.contains("อ่าน")) {
-                com.assistive.system.ai.OcrPostValidator.validateOcrResult(finalOutput)
-            } else {
-                finalOutput
-            }
-
-            _inferenceOutput.value = validatedOutput
-            _serviceStatus.value = "ระบบพร้อมทำงาน (${latencyMs}ms)"
-
-            // Trigger Haptic Feedback based on the VLM output severity
-            triggerResponseHaptics(validatedOutput)
-
-            // Speak the VLM output
-            audioPipeline.speak(validatedOutput) {
-                serviceScope.launch {
-                    isAnalyzing = false
-                    _currentlyAnalyzingBitmap.value = null
-                    processNextTask()
+                try {
+                    // Impose 45 seconds timeout to prevent infinite loading freezes on stalled inferences
+                    kotlinx.coroutines.withTimeout(45000L) {
+                        inferenceEngine.analyzeImageStream(task.imageBytes, task.prompt).collect { token ->
+                            fullResponse.append(token)
+                            _inferenceOutput.value = fullResponse.toString()
+                        }
+                    }
+                } finally {
+                    // Resume ASR listening thread
+                    audioPipeline.resumeListening()
                 }
 
                 val latencyMs = System.currentTimeMillis() - startTime
@@ -293,8 +271,18 @@ class AssistiveService : Service() {
                 // Trigger Haptic Feedback based on the VLM output severity
                 triggerResponseHaptics(validatedOutput)
 
-                // Speak the VLM output (non-blocking)
-                audioPipeline.speak(validatedOutput)
+                // Speak the VLM output safely
+                kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
+                    var resumed = false
+                    audioPipeline.speak(validatedOutput) {
+                        if (!resumed) {
+                            resumed = true
+                            if (cont.isActive) {
+                                cont.resumeWith(Result.success(Unit))
+                            }
+                        }
+                    }
+                }
 
             } catch (e: Exception) {
                 Log.e("AssistiveService", "Exception during analysis coroutine: ${e.message}", e)
@@ -387,7 +375,7 @@ class AssistiveService : Service() {
             audioPipeline.reinitializeRecognizer()
             val isVlmReal = !inferenceEngine.isMockMode()
             val isAsrReal = audioPipeline.isAsrReady()
-            performanceMonitor.updateVlmMode(isVlmReal)
+            performanceMonitor.updateVlmMode(isVlmReal, inferenceEngine.getActiveBackend())
             performanceMonitor.updateAsrMode(isAsrReal)
             val modeLabel = if (isVlmReal && isAsrReal) "Real Mode ✅" else "Partial Mode"
             _serviceStatus.value = "โหลดสำเร็จ ($modeLabel)"
