@@ -59,9 +59,18 @@ import com.assistive.system.vision.DistancePipeline
 import com.assistive.system.vision.DistanceResult
 import com.assistive.system.vision.ObjectDetector
 import com.assistive.system.vision.VisionPipeline
+import com.assistive.system.vision.BackgroundRenderer
+import com.assistive.system.vision.toBitmap
 import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import android.opengl.GLSurfaceView
+import android.opengl.GLES20
+import android.opengl.GLES11Ext
+import android.view.WindowManager
+import com.google.ar.core.Session
+import javax.microedition.khronos.egl.EGLConfig
+import javax.microedition.khronos.opengles.GL10
 
 class MainActivity : ComponentActivity() {
 
@@ -74,7 +83,7 @@ class MainActivity : ComponentActivity() {
     private var objectDetector: ObjectDetector? = null
     private var depthEstimator: DepthEstimator? = null
     private var distancePipeline: DistancePipeline? = null
-    private var isArInitialized = false
+    private var isArInitialized by mutableStateOf(false)
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -155,6 +164,24 @@ class MainActivity : ComponentActivity() {
         bindService(intent, connection, Context.BIND_AUTO_CREATE)
     }
 
+    override fun onResume() {
+        super.onResume()
+        try {
+            depthEstimator?.onResume()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to resume ARCore session: ${e.message}")
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        try {
+            depthEstimator?.onPause()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to pause ARCore session: ${e.message}")
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         if (isBound) {
@@ -164,6 +191,85 @@ class MainActivity : ComponentActivity() {
         visionPipeline?.shutdown()
         cameraExecutor.shutdown()
         releaseArCorePipeline()
+    }
+
+    inner class ArCoreRenderer(
+        private val glSurfaceView: GLSurfaceView,
+        private val session: Session
+    ) : GLSurfaceView.Renderer {
+        
+        private val backgroundRenderer = BackgroundRenderer()
+        private var lastProcessedTime = 0L
+
+        override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+            GLES20.glClearColor(0.1f, 0.1f, 0.1f, 1.0f)
+            backgroundRenderer.createOnGlThread(applicationContext)
+            
+            val textures = IntArray(1)
+            GLES20.glGenTextures(1, textures, 0)
+            val cameraTextureId = textures[0]
+            
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId)
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            
+            backgroundRenderer.cameraTextureId = cameraTextureId
+            session.setCameraTextureName(cameraTextureId)
+        }
+
+        override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
+            GLES20.glViewport(0, 0, width, height)
+            val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            val rotation = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                display?.rotation ?: 0
+            } else {
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay.rotation
+            }
+            session.setDisplayGeometry(rotation, width, height)
+        }
+
+        override fun onDrawFrame(gl: GL10?) {
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+            val session = session
+            try {
+                val frame = session.update()
+                backgroundRenderer.draw(frame)
+                
+                val depthImage = try {
+                    frame.acquireDepthImage16Bits()
+                } catch (e: Exception) {
+                    null
+                }
+                depthEstimator?.updateArCoreFrame(frame, depthImage)
+                
+                val now = System.currentTimeMillis()
+                if (now - lastProcessedTime >= 200L) {
+                    lastProcessedTime = now
+                    val cameraImage = try {
+                        frame.acquireCameraImage()
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (cameraImage != null) {
+                        cameraExecutor.execute {
+                            try {
+                                val bitmap = cameraImage.toBitmap()
+                                visionPipeline?.processBitmapFromArCore(bitmap)
+                            } catch (e: Exception) {
+                                Log.w("ArCoreRenderer", "Failed to process ARCore frame: ${e.message}")
+                            } finally {
+                                cameraImage.close()
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ArCoreRenderer", "onDrawFrame failed: ${e.message}", e)
+            }
+        }
     }
 
     /**
@@ -197,9 +303,25 @@ class MainActivity : ComponentActivity() {
 
                 // Step 2: Initialize DepthEstimator (ARCore) — always attempt
                 val depth = DepthEstimator()
-                val arcoreReady = depth.checkAndInstallArCore(this)
-                if (arcoreReady) {
-                    depth.initialize(this)
+                
+                // Run ARCore availability check and session initialization on UI Thread
+                var arcoreReady = false
+                val latch = java.util.concurrent.CountDownLatch(1)
+                runOnUiThread {
+                    try {
+                        arcoreReady = depth.checkAndInstallArCore(this@MainActivity)
+                        if (arcoreReady) {
+                            depth.initialize(this@MainActivity)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "ARCore UI thread check failed: ${e.message}")
+                    } finally {
+                        latch.countDown()
+                    }
+                }
+                latch.await()
+
+                if (arcoreReady && depth.isRealArCoreActive) {
                     Log.i("MainActivity", "ARCore Depth API initialized")
                 } else {
                     Log.w("MainActivity", "ARCore not available — using heuristic depth fallback")
@@ -215,13 +337,29 @@ class MainActivity : ComponentActivity() {
                     }
                 )
 
+                // Pre-initialize VisionPipeline on UI thread if not already set up
+                if (visionPipeline == null) {
+                    runOnUiThread {
+                        if (visionPipeline == null) {
+                            visionPipeline = VisionPipeline(
+                                context = applicationContext,
+                                lifecycleOwner = this@MainActivity,
+                                isFrameRequested = { assistiveService?.hasPendingPrompt() == true },
+                                onSceneChanged = { jpegBytes ->
+                                    assistiveService?.onCameraFrameAvailable(jpegBytes)
+                                }
+                            )
+                        }
+                        visionPipeline?.distancePipeline = pipeline
+                    }
+                } else {
+                    visionPipeline?.distancePipeline = pipeline
+                }
+
                 objectDetector = detector
                 depthEstimator = depth
                 distancePipeline = pipeline
                 isArInitialized = true
-
-                // Inject into VisionPipeline — safe because it's @Volatile
-                visionPipeline?.distancePipeline = pipeline
 
                 // Attach to service if already bound
                 assistiveService?.attachDistancePipeline(pipeline)
@@ -485,50 +623,69 @@ class MainActivity : ComponentActivity() {
                         contentDescription = "หน้าต่างกล้อง โหมดปัจจุบันคือ ${currentMode.speech}. แตะสองครั้งเพื่อเริ่มสแกน หรือปัดซ้ายขวาเพื่อเปลี่ยนโหมด"
                     }
             ) {
-                AndroidView(
-                    factory = { ctx ->
-                        val previewView = PreviewView(ctx)
-                        val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                        cameraProviderFuture.addListener({
-                            val cameraProvider = cameraProviderFuture.get()
-                            val preview = Preview.Builder().build().also {
-                                it.setSurfaceProvider(previewView.surfaceProvider)
-                            }
-
-                            visionPipeline = VisionPipeline(
-                                context = ctx,
-                                lifecycleOwner = lifecycleOwner,
-                                isFrameRequested = { assistiveService?.hasPendingPrompt() == true },
-                                onSceneChanged = { jpegBytes ->
-                                    assistiveService?.onCameraFrameAvailable(jpegBytes)
+                val arActive = isArInitialized && depthEstimator?.isRealArCoreActive == true
+                if (arActive) {
+                    val session = depthEstimator?.getSession()
+                    if (session != null) {
+                        AndroidView(
+                            factory = { ctx ->
+                                GLSurfaceView(ctx).apply {
+                                    setEGLContextClientVersion(2)
+                                    val renderer = ArCoreRenderer(this, session)
+                                    setRenderer(renderer)
+                                    renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
                                 }
-                            )
-                            // distancePipeline will be injected via visionPipeline.distancePipeline
-                            // once ARCore finishes initializing on its background thread
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                } else {
+                    AndroidView(
+                        factory = { ctx ->
+                            val previewView = PreviewView(ctx)
+                            val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                            cameraProviderFuture.addListener({
+                                val cameraProvider = cameraProviderFuture.get()
+                                val preview = Preview.Builder().build().also {
+                                    it.setSurfaceProvider(previewView.surfaceProvider)
+                                }
 
-                            @Suppress("DEPRECATION")
-                            val imageAnalysis = ImageAnalysis.Builder()
-                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                                .setTargetResolution(android.util.Size(640, 480))
-                                .build()
-                            imageAnalysis.setAnalyzer(cameraExecutor, visionPipeline!!.getAnalyzer())
+                                if (visionPipeline == null) {
+                                    visionPipeline = VisionPipeline(
+                                        context = ctx,
+                                        lifecycleOwner = lifecycleOwner,
+                                        isFrameRequested = { assistiveService?.hasPendingPrompt() == true },
+                                        onSceneChanged = { jpegBytes ->
+                                            assistiveService?.onCameraFrameAvailable(jpegBytes)
+                                        }
+                                    )
+                                }
+                                visionPipeline?.distancePipeline = distancePipeline
 
-                            try {
-                                cameraProvider.unbindAll()
-                                cameraProvider.bindToLifecycle(
-                                    lifecycleOwner,
-                                    CameraSelector.DEFAULT_BACK_CAMERA,
-                                    preview,
-                                    imageAnalysis
-                                )
-                            } catch (e: Exception) {
-                                Log.e("MainActivity", "Camera binding failed: ${e.message}")
-                            }
-                        }, ContextCompat.getMainExecutor(ctx))
-                        previewView
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
+                                @Suppress("DEPRECATION")
+                                val imageAnalysis = ImageAnalysis.Builder()
+                                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                    .setTargetResolution(android.util.Size(640, 480))
+                                    .build()
+                                imageAnalysis.setAnalyzer(cameraExecutor, visionPipeline!!.getAnalyzer())
+
+                                try {
+                                    cameraProvider.unbindAll()
+                                    cameraProvider.bindToLifecycle(
+                                        lifecycleOwner,
+                                        CameraSelector.DEFAULT_BACK_CAMERA,
+                                        preview,
+                                        imageAnalysis
+                                    )
+                                } catch (e: Exception) {
+                                    Log.e("MainActivity", "Camera binding failed: ${e.message}")
+                                }
+                            }, ContextCompat.getMainExecutor(ctx))
+                            previewView
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
                 // "Tap to analyze" hint overlay
                 Box(
                     modifier = Modifier

@@ -250,9 +250,51 @@ class VisionPipeline(
         return out.toByteArray()
     }
 
+    /**
+     * Entry point for camera frames coming directly from ARCore loop.
+     * Bypasses CameraX ImageAnalysis.
+     */
+    fun processBitmapFromArCore(rawBitmap: Bitmap) {
+        val currentDownsampled = downsampleBitmapToGrayscale32x32(rawBitmap)
+        val diff = calculateFrameDifference(currentDownsampled, lastDownsampledFrame)
+        lastDownsampledFrame = currentDownsampled
+
+        val hasSceneChanged = diff > SCENE_DIFF_THRESHOLD
+        val frameRequested = isFrameRequested()
+
+        distancePipeline?.let { pipeline ->
+            try {
+                pipeline.submitFrame(rawBitmap.copy(rawBitmap.config, false))
+            } catch (e: Exception) {
+                Log.w("VisionPipeline", "DistancePipeline submit failed: ${e.message}")
+            }
+        }
+
+        if (frameRequested || (!isMoving && hasSceneChanged)) {
+            val jpegBytes = bitmapToJpegBytes(rawBitmap, 0) // ARCore frame is already rotated
+            onSceneChanged(jpegBytes)
+        }
+    }
+
+    private fun downsampleBitmapToGrayscale32x32(bitmap: Bitmap): IntArray {
+        val scaled = Bitmap.createScaledBitmap(bitmap, DOWNSAMPLE_WIDTH, DOWNSAMPLE_HEIGHT, true)
+        val pixels = IntArray(DOWNSAMPLE_WIDTH * DOWNSAMPLE_HEIGHT)
+        scaled.getPixels(pixels, 0, DOWNSAMPLE_WIDTH, 0, 0, DOWNSAMPLE_WIDTH, DOWNSAMPLE_HEIGHT)
+        val grayscale = IntArray(DOWNSAMPLE_WIDTH * DOWNSAMPLE_HEIGHT)
+        for (i in pixels.indices) {
+            val color = pixels[i]
+            val r = (color shr 16) and 0xFF
+            val g = (color shr 8) and 0xFF
+            val b = color and 0xFF
+            grayscale[i] = (r * 0.299f + g * 0.587f + b * 0.114f).toInt()
+        }
+        scaled.recycle()
+        return grayscale
+    }
 
     fun shutdown() {
         unregisterSensors()
         executor.shutdown()
     }
 }
+
