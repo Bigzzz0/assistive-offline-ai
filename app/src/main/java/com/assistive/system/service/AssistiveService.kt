@@ -243,7 +243,6 @@ class AssistiveService : Service() {
                             _inferenceOutput.value = fullResponse.toString()
                         }
                     }
-                    }
                 } finally {
                     // Resume ASR listening thread
                     audioPipeline.resumeListening()
