@@ -185,9 +185,9 @@ class DepthEstimator {
                 val cx = (u * depthWidth).toInt().coerceIn(0, depthWidth - 1)
                 val cy = (v * depthHeight).toInt().coerceIn(0, depthHeight - 1)
                 
-                // Sample 5x5 window to filter noise and invalid pixels
+                // Sample 7x7 window to filter noise and invalid pixels
                 val depthValues = mutableListOf<Float>()
-                val radius = 2
+                val radius = 3
                 
                 for (dy in -radius..radius) {
                     for (dx in -radius..radius) {
@@ -197,10 +197,14 @@ class DepthEstimator {
                         val byteOffset = y * depthRowStride + x * depthPixelStride
                         val shortOffset = byteOffset / 2
                         if (shortOffset in 0 until buffer.limit()) {
-                            val depthMillimeters = buffer.get(shortOffset).toInt() and 0xFFFF
+                            // Apply 0x1FFF mask to extract clean 13-bit depth in millimeters (ignoring top 3 confidence bits)
+                            val depthMillimeters = buffer.get(shortOffset).toInt() and 0x1FFF
                             if (depthMillimeters > 0) {
                                 val depthMeters = depthMillimeters / 1000.0f
-                                depthValues.add(depthMeters)
+                                // Filter out unrealistic outliers
+                                if (depthMeters in 0.1f..8.0f) {
+                                    depthValues.add(depthMeters)
+                                }
                             }
                         }
                     }

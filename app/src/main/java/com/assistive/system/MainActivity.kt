@@ -783,7 +783,9 @@ class MainActivity : ComponentActivity() {
                         onClick = {
                             assistiveService?.hapticManager?.vibrateGeneralInfo()
                             cameraExecutor.execute {
-                                val centerDepth = depthEstimator?.getDepthAtNormalizedPoint(0.5f, 0.5f) ?: -1f
+                                // Try to get the smoothed EMA center distance from the active pipeline first
+                                val centerResult = distancePipeline?.lastDistanceResults?.firstOrNull { it.label == "center" }
+                                val centerDepth = centerResult?.distanceMeters ?: depthEstimator?.getDepthAtNormalizedPoint(0.5f, 0.5f) ?: -1f
                                 if (centerDepth > 0f) {
                                     val distStr = String.format(java.util.Locale.US, "%.1f", centerDepth)
                                     assistiveService?.audioPipeline?.speak("ระยะตรงกลาง $distStr เมตร")
