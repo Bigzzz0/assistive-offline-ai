@@ -36,7 +36,7 @@ class ObjectDetector(private val context: Context) {
 
     private val TAG = "ObjectDetector"
     private val MODEL_FILENAME = "yolo11n.tflite"
-    private val INPUT_SIZE = 640
+    private var modelInputSize = 640
     private val CONFIDENCE_THRESHOLD = 0.40f
     private val NMS_THRESHOLD = 0.45f
 
@@ -44,12 +44,20 @@ class ObjectDetector(private val context: Context) {
     private var gpuDelegate: GpuDelegate? = null
     private var nnApiDelegate: NnApiDelegate? = null
     private var isInitialized = false
-    private var outputArray: Array<Array<FloatArray>>? = null
+    private var outputBuffer: ByteBuffer? = null
+    private var inputBuffer: ByteBuffer? = null
+    var modelInfo: String = ""
+        private set
 
-    // Pre-allocated static buffers for zero-allocation real-time inference
+    private var inputDataType = org.tensorflow.lite.DataType.FLOAT32
+    private var outputDataType = org.tensorflow.lite.DataType.FLOAT32
+    private var inputScale = 1.0f
+    private var inputZeroPoint = 0
+    private var outputScale = 1.0f
+    private var outputZeroPoint = 0
+    private var outputDim2 = 8400
     private var scaledBitmap: Bitmap? = null
     private var canvas: android.graphics.Canvas? = null
-    private lateinit var inputBuffer: ByteBuffer
     private lateinit var pixels: IntArray
     private lateinit var floatArray: FloatArray
 
@@ -120,21 +128,45 @@ class ObjectDetector(private val context: Context) {
             }
 
             interpreter = Interpreter(modelBuffer, options)
-            val outputShape = interpreter?.getOutputTensor(0)?.shape()
-            Log.i(TAG, "ObjectDetector: YOLO11 loaded, output shape is ${outputShape?.contentToString()}")
-            if (outputShape != null) {
-                outputArray = Array(outputShape[0]) { Array(outputShape[1]) { FloatArray(outputShape[2]) } }
+            
+            val inputTensor = interpreter?.getInputTensor(0)
+            val outputTensor = interpreter?.getOutputTensor(0)
+            val inputShape = inputTensor?.shape()
+            val outputShape = outputTensor?.shape()
+            
+            Log.i(TAG, "ObjectDetector: YOLO11 loaded.")
+            Log.i(TAG, "Input: shape=${inputShape?.contentToString()} type=${inputTensor?.dataType()}")
+            Log.i(TAG, "Output: shape=${outputShape?.contentToString()} type=${outputTensor?.dataType()}")
+            
+            if (inputTensor != null && inputShape != null && inputShape.size >= 3) {
+                modelInputSize = if (inputShape[1] > 3) inputShape[1] else inputShape[2]
+                inputDataType = inputTensor.dataType()
+                val quant = inputTensor.quantizationParams()
+                inputScale = if (quant.scale != 0.0f) quant.scale else 1.0f
+                inputZeroPoint = quant.zeroPoint
+                inputBuffer = ByteBuffer.allocateDirect(inputTensor.numBytes()).apply {
+                    order(ByteOrder.nativeOrder())
+                }
+            }
+            
+            if (outputTensor != null && outputShape != null && outputShape.size >= 2) {
+                outputDataType = outputTensor.dataType()
+                val quant = outputTensor.quantizationParams()
+                outputScale = if (quant.scale != 0.0f) quant.scale else 1.0f
+                outputZeroPoint = quant.zeroPoint
+                outputDim2 = if (outputShape.size == 3) outputShape[2] else outputShape[1]
+                outputBuffer = ByteBuffer.allocateDirect(outputTensor.numBytes()).apply {
+                    order(ByteOrder.nativeOrder())
+                }
             }
             
             // Pre-allocate image processing buffers once
-            scaledBitmap = Bitmap.createBitmap(INPUT_SIZE, INPUT_SIZE, Bitmap.Config.ARGB_8888)
+            scaledBitmap = Bitmap.createBitmap(modelInputSize, modelInputSize, Bitmap.Config.ARGB_8888)
             canvas = android.graphics.Canvas(scaledBitmap!!)
-            inputBuffer = ByteBuffer.allocateDirect(1 * INPUT_SIZE * INPUT_SIZE * 3 * 4).apply {
-                order(ByteOrder.nativeOrder())
-            }
-            pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
-            floatArray = FloatArray(INPUT_SIZE * INPUT_SIZE * 3)
+            pixels = IntArray(modelInputSize * modelInputSize)
+            floatArray = FloatArray(modelInputSize * modelInputSize * 3)
             
+            modelInfo = "In:${inputDataType} Out:${outputDataType} S:${(outputScale * 10000).toInt() / 10000f} ZP:${outputZeroPoint} Size:${modelInputSize}px"
             isInitialized = true
             Log.i(TAG, "ObjectDetector initialized successfully")
             true
@@ -152,25 +184,49 @@ class ObjectDetector(private val context: Context) {
         val interp = interpreter ?: return emptyList()
 
         return try {
-            val targetBitmap = scaledBitmap ?: Bitmap.createBitmap(INPUT_SIZE, INPUT_SIZE, Bitmap.Config.ARGB_8888).also { scaledBitmap = it }
+            val targetBitmap = scaledBitmap ?: Bitmap.createBitmap(modelInputSize, modelInputSize, Bitmap.Config.ARGB_8888).also { scaledBitmap = it }
             val targetCanvas = canvas ?: android.graphics.Canvas(targetBitmap).also { canvas = it }
             
             // Scale and draw input bitmap in-place inside the synchronized block (<1ms)
             synchronized(lock) {
-                targetCanvas.drawBitmap(bitmap, null, RectF(0f, 0f, INPUT_SIZE.toFloat(), INPUT_SIZE.toFloat()), null)
+                targetCanvas.drawBitmap(bitmap, null, RectF(0f, 0f, modelInputSize.toFloat(), modelInputSize.toFloat()), null)
             }
             
             val buffer = bitmapToByteBuffer(targetBitmap)
 
             val shape = interp.getOutputTensor(0).shape() // [1, 84, 8400] or [1, 8400, 84]
-            val outputArray = this.outputArray ?: Array(shape[0]) { Array(shape[1]) { FloatArray(shape[2]) } }
+            val outBuffer = this.outputBuffer ?: ByteBuffer.allocateDirect(interp.getOutputTensor(0).numBytes()).apply {
+                order(ByteOrder.nativeOrder())
+            }.also { this.outputBuffer = it }
             
-            interp.run(buffer, outputArray)
+            outBuffer.rewind()
+            interp.run(buffer, outBuffer)
+            outBuffer.rewind()
 
             val results = mutableListOf<DetectedObject>()
-            val isRowFormat = shape[1] < shape[2] // true if [1, 84, 8400]
-            val numBoxes = if (isRowFormat) shape[2] else shape[1]
-            val numClasses = 80 // COCO dataset
+            val dim1 = if (shape.size == 3) shape[1] else shape[0]
+            val dim2 = if (shape.size == 3) shape[2] else shape[1]
+            val isRowFormat = dim1 < dim2
+            val numBoxes = if (isRowFormat) dim2 else dim1
+            val channels = if (isRowFormat) dim1 else dim2
+            val numClasses = channels - 4
+
+            var maxFrameScore = 0f
+            var maxFrameClass = -1
+
+            val getVal = { r: Int, col: Int ->
+                val index = r * dim2 + col
+                if (outputDataType == org.tensorflow.lite.DataType.FLOAT32) {
+                    outBuffer.getFloat(index * 4)
+                } else if (outputDataType == org.tensorflow.lite.DataType.UINT8) {
+                    val qVal = outBuffer.get(index).toInt() and 0xFF
+                    (qVal - outputZeroPoint) * outputScale
+                } else {
+                    // INT8
+                    val qVal = outBuffer.get(index).toInt()
+                    (qVal - outputZeroPoint) * outputScale
+                }
+            }
 
             for (c in 0 until numBoxes) {
                 // Read raw center-x, center-y, width, height (in 640x640 scale)
@@ -180,15 +236,15 @@ class ObjectDetector(private val context: Context) {
                 val h: Float
 
                 if (isRowFormat) {
-                    cx = outputArray[0][0][c]
-                    cy = outputArray[0][1][c]
-                    w = outputArray[0][2][c]
-                    h = outputArray[0][3][c]
+                    cx = getVal(0, c)
+                    cy = getVal(1, c)
+                    w = getVal(2, c)
+                    h = getVal(3, c)
                 } else {
-                    cx = outputArray[0][c][0]
-                    cy = outputArray[0][c][1]
-                    w = outputArray[0][c][2]
-                    h = outputArray[0][c][3]
+                    cx = getVal(c, 0)
+                    cy = getVal(c, 1)
+                    w = getVal(c, 2)
+                    h = getVal(c, 3)
                 }
 
                 // Find class with maximum score
@@ -196,9 +252,9 @@ class ObjectDetector(private val context: Context) {
                 var maxClassIdx = -1
                 for (classIdx in 0 until numClasses) {
                     val score = if (isRowFormat) {
-                        outputArray[0][4 + classIdx][c]
+                        getVal(4 + classIdx, c)
                     } else {
-                        outputArray[0][c][4 + classIdx]
+                        getVal(c, 4 + classIdx)
                     }
                     if (score > maxScore) {
                         maxScore = score
@@ -206,14 +262,19 @@ class ObjectDetector(private val context: Context) {
                     }
                 }
 
+                if (maxScore > maxFrameScore) {
+                    maxFrameScore = maxScore
+                    maxFrameClass = maxClassIdx
+                }
+
                 if (maxScore >= CONFIDENCE_THRESHOLD) {
                     val label = getLabel(maxClassIdx)
                     
                     // Convert bounding box center coords to normalized [0..1] rectangle
-                    val left = (cx - w / 2f) / INPUT_SIZE
-                    val top = (cy - h / 2f) / INPUT_SIZE
-                    val right = (cx + w / 2f) / INPUT_SIZE
-                    val bottom = (cy + h / 2f) / INPUT_SIZE
+                    val left = (cx - w / 2f) / modelInputSize
+                    val top = (cy - h / 2f) / modelInputSize
+                    val right = (cx + w / 2f) / modelInputSize
+                    val bottom = (cy + h / 2f) / modelInputSize
 
                     val rect = RectF(
                         left.coerceIn(0f, 1f),
@@ -224,6 +285,10 @@ class ObjectDetector(private val context: Context) {
                     results.add(DetectedObject(label, thaiLabels[label] ?: label, maxScore, rect))
                 }
             }
+
+            val maxScorePercent = (maxFrameScore * 100).toInt()
+            val classLabel = if (maxFrameClass >= 0) getLabel(maxFrameClass) else "none"
+            modelInfo = "In:${inputDataType} Out:${outputDataType} S:${(outputScale * 10000).toInt() / 10000f} ZP:${outputZeroPoint} Size:${modelInputSize}px | maxVal=${maxScorePercent}% ($classLabel)"
 
             // Apply Non-Maximum Suppression to remove duplicate boxes
             val filteredResults = applyNMS(results)
@@ -242,7 +307,7 @@ class ObjectDetector(private val context: Context) {
         scaledBitmap?.recycle()
         scaledBitmap = null
         canvas = null
-        interpreter = null; gpuDelegate = null; nnApiDelegate = null
+        interpreter = null; gpuDelegate = null; nnApiDelegate = null; outputBuffer = null
         isInitialized = false
         Log.i(TAG, "ObjectDetector released")
     }
@@ -256,20 +321,42 @@ class ObjectDetector(private val context: Context) {
     }
 
     private fun bitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        // Reuse pre-allocated arrays to guarantee zero-allocation loop
-        bitmap.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
-        
-        var outIdx = 0
-        for (i in pixels.indices) {
-            val px = pixels[i]
-            floatArray[outIdx++] = ((px shr 16) and 0xFF) / 255.0f
-            floatArray[outIdx++] = ((px shr 8) and 0xFF) / 255.0f
-            floatArray[outIdx++] = (px and 0xFF) / 255.0f
+        val buffer = inputBuffer ?: ByteBuffer.allocateDirect(1 * modelInputSize * modelInputSize * 3 * 4).apply {
+            order(ByteOrder.nativeOrder())
+            inputBuffer = this
         }
-        inputBuffer.rewind()
-        inputBuffer.asFloatBuffer().put(floatArray)
-        inputBuffer.rewind()
-        return inputBuffer
+        
+        bitmap.getPixels(pixels, 0, modelInputSize, 0, 0, modelInputSize, modelInputSize)
+        
+        buffer.rewind()
+        if (inputDataType == org.tensorflow.lite.DataType.FLOAT32) {
+            var outIdx = 0
+            for (i in pixels.indices) {
+                val px = pixels[i]
+                floatArray[outIdx++] = ((px shr 16) and 0xFF) / 255.0f
+                floatArray[outIdx++] = ((px shr 8) and 0xFF) / 255.0f
+                floatArray[outIdx++] = (px and 0xFF) / 255.0f
+            }
+            buffer.asFloatBuffer().put(floatArray)
+        } else {
+            // Quantized model (INT8 or UINT8)
+            for (i in pixels.indices) {
+                val px = pixels[i]
+                val r = ((px shr 16) and 0xFF) / 255.0f
+                val g = ((px shr 8) and 0xFF) / 255.0f
+                val b = (px and 0xFF) / 255.0f
+                
+                val qr = ((r / inputScale) + inputZeroPoint).toInt().coerceIn(-128, 255).toByte()
+                val qg = ((g / inputScale) + inputZeroPoint).toInt().coerceIn(-128, 255).toByte()
+                val qb = ((b / inputScale) + inputZeroPoint).toInt().coerceIn(-128, 255).toByte()
+                
+                buffer.put(qr)
+                buffer.put(qg)
+                buffer.put(qb)
+            }
+        }
+        buffer.rewind()
+        return buffer
     }
 
     private fun applyNMS(objects: List<DetectedObject>): List<DetectedObject> {

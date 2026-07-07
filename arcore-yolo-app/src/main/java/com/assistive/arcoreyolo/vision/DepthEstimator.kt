@@ -23,6 +23,16 @@ class DepthEstimator {
     var arCoreErrorMessage: String? = null
         private set
 
+    // Debug log properties for UI display
+    @Volatile var debugDepthWidth = 0
+    @Volatile var debugDepthHeight = 0
+    @Volatile var debugRawX = 0
+    @Volatile var debugRawY = 0
+    @Volatile var debugRawValue = 0
+    @Volatile var debugMaskedValue = 0
+    @Volatile var debugValidPixels = 0
+    @Volatile var debugMeters = -1f
+
     private var depthWidth = 0
     private var depthHeight = 0
     private var depthRowStride = 0
@@ -290,6 +300,21 @@ class DepthEstimator {
             val cx = (u * w).toInt().coerceIn(0, w - 1)
             val cy = (v * h).toInt().coerceIn(0, h - 1)
             
+            debugDepthWidth = w
+            debugDepthHeight = h
+            debugRawX = cx
+            debugRawY = cy
+
+            val byteOffsetCenter = cy * rowStr + cx * pixStr
+            val shortOffsetCenter = byteOffsetCenter / 2
+            if (shortOffsetCenter in 0 until buffer.limit()) {
+                debugRawValue = buffer.get(shortOffsetCenter).toInt()
+                debugMaskedValue = debugRawValue and 0x1FFF
+            } else {
+                debugRawValue = 0
+                debugMaskedValue = 0
+            }
+
             val depthValues = mutableListOf<Float>()
             val radius = 3
             
@@ -312,12 +337,15 @@ class DepthEstimator {
                 }
             }
             
-            return if (depthValues.isNotEmpty()) {
+            val result = if (depthValues.isNotEmpty()) {
                 depthValues.sort()
                 depthValues[depthValues.size / 2]
             } else {
                 -1f
             }
+            debugValidPixels = depthValues.size
+            debugMeters = result
+            return result
         } catch (e: Exception) {
             return -1f
         }

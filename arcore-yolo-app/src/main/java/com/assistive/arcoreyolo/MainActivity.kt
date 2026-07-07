@@ -460,6 +460,12 @@ class MainActivity : ComponentActivity() {
             // Run YOLO detection
             detector.confidenceThreshold = confidenceThreshold
             val detectedList = detector.detect(bitmap, frameLock)
+            val err = detector.lastInferenceError
+            if (err != null) {
+                mainScope.launch { yoloStatusState = "YOLO Err: $err" }
+            } else {
+                mainScope.launch { yoloStatusState = "YOLO Active (${detector.modelInfo})" }
+            }
             
             val inferenceTime = System.currentTimeMillis() - startTime
 
@@ -830,6 +836,71 @@ class MainActivity : ComponentActivity() {
                     StatBadge(label = "YOLO Nano", value = "${yoloLatencyState}ms", modifier = Modifier.weight(1f))
                     StatBadge(label = "Inference Rate", value = "${inferenceFpsState} FPS", modifier = Modifier.weight(1f))
                     StatBadge(label = "Objects Detected", value = "${detectedObjectsState.size}", modifier = Modifier.weight(1f))
+                }
+
+                val depth = depthEstimator
+                if (depth != null && depth.isRealArCoreActive) {
+                    val forceRecompose = centerDistanceState // Read state to trigger recompositions
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.Black.copy(alpha = 0.65f))
+                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            text = "ARCORE DEPTH DIAGNOSTICS (CENTER QUERY)",
+                            color = Color(0xFF60A5FA),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Depth Map Resolution:", color = Color.Gray, fontSize = 11.sp)
+                            Text("${depth.debugDepthWidth}x${depth.debugDepthHeight} px", color = Color.White, fontSize = 11.sp)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Center Pixel Coord:", color = Color.Gray, fontSize = 11.sp)
+                            Text("x=${depth.debugRawX}, y=${depth.debugRawY}", color = Color.White, fontSize = 11.sp)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Raw 16-bit Short:", color = Color.Gray, fontSize = 11.sp)
+                            Text("0x${Integer.toHexString(depth.debugRawValue).uppercase()}", color = Color.White, fontSize = 11.sp)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Clean 13-bit Depth:", color = Color.Gray, fontSize = 11.sp)
+                            Text("${depth.debugMaskedValue} mm", color = Color.White, fontSize = 11.sp)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Dequantized Meter:", color = Color.Gray, fontSize = 11.sp)
+                            Text("${depth.debugMaskedValue} / 1000 = ${String.format(Locale.US, "%.3f", depth.debugMeters)} m", color = Color.White, fontSize = 11.sp)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("7x7 Median Filter:", color = Color.Gray, fontSize = 11.sp)
+                            Text("Valid: ${depth.debugValidPixels}/49 px", color = Color.White, fontSize = 11.sp)
+                        }
+                    }
                 }
             }
 
