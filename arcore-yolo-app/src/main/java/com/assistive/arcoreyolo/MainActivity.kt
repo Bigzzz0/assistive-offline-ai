@@ -77,6 +77,17 @@ data class DisplayedObject(
     val distanceMeters: Float
 )
 
+/**
+ * Data class representing raw object detection details in raw sensor IMAGE space.
+ */
+data class RawDetection(
+    val label: String,
+    val labelThai: String,
+    val confidence: Float,
+    val boundingBox: RectF, // IMAGE_NORMALIZED coordinates
+    val distanceMeters: Float
+)
+
 class MainActivity : ComponentActivity() {
 
     private val TAG = "MainActivity"
@@ -110,6 +121,11 @@ class MainActivity : ComponentActivity() {
     private var pipelineBitmap: Bitmap? = null
     private var hasNewFrame = false
     private var lastHapticTime = 0L
+
+    // Thread-safe raw detections from background YOLO thread
+    private val rawDetections = mutableListOf<RawDetection>()
+    private val rawDetectionsLock = Any()
+
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -344,6 +360,56 @@ class MainActivity : ComponentActivity() {
                     depthEstimator?.processPendingDepthRequests(frame)
                 }
 
+                // 1.2 Sample center screen depth immediately on the GL thread (30 FPS)
+                if (depthEstimator?.isRealArCoreActive == true) {
+                    val dist = depthEstimator?.getDepthAtPointImmediate(0.5f to 0.5f, isNormalizedImageSpace = false, frame = frame) ?: -1f
+                    mainScope.launch {
+                        centerDistanceState = dist
+                    }
+                }
+
+                // 1.5 Update coordinate transformations on the active frame for current raw detections
+                val currentRawDetections = synchronized(rawDetectionsLock) { ArrayList(rawDetections) }
+                val updatedDisplayList = mutableListOf<DisplayedObject>()
+                for (raw in currentRawDetections) {
+                    val box = raw.boundingBox
+                    val imgCoords = floatArrayOf(
+                        box.left, box.top,
+                        box.right, box.bottom
+                    )
+                    val viewCoords = FloatArray(4)
+                    try {
+                        frame.transformCoordinates2d(
+                            Coordinates2d.IMAGE_NORMALIZED,
+                            imgCoords,
+                            Coordinates2d.VIEW_NORMALIZED,
+                            viewCoords
+                        )
+                    } catch (e: Exception) {
+                        System.arraycopy(imgCoords, 0, viewCoords, 0, 4)
+                    }
+
+                    val screenLeft = minOf(viewCoords[0], viewCoords[2])
+                    val screenTop = minOf(viewCoords[1], viewCoords[3])
+                    val screenRight = maxOf(viewCoords[0], viewCoords[2])
+                    val screenBottom = maxOf(viewCoords[1], viewCoords[3])
+
+                    updatedDisplayList.add(
+                        DisplayedObject(
+                            label = raw.label,
+                            labelThai = raw.labelThai,
+                            confidence = raw.confidence,
+                            screenRect = RectF(screenLeft, screenTop, screenRight, screenBottom),
+                            distanceMeters = raw.distanceMeters
+                        )
+                    )
+                }
+
+                mainScope.launch {
+                    detectedObjectsState.clear()
+                    detectedObjectsState.addAll(updatedDisplayList)
+                }
+
                 // 2. Perform object detection at throttled interval (~5 FPS / 200ms)
                 val now = System.currentTimeMillis()
                 if (now - lastProcessedTime >= 200L) {
@@ -359,7 +425,7 @@ class MainActivity : ComponentActivity() {
                             
                             // Trigger async inference
                             inferenceExecutor.execute {
-                                runInferenceOnFrame(frame)
+                                runInferenceOnFrame()
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to convert camera image to bitmap: ${e.message}")
@@ -371,7 +437,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        private fun runInferenceOnFrame(frame: Frame) {
+        private fun runInferenceOnFrame() {
             val detector = objectDetector ?: return
             val depth = depthEstimator ?: return
 
@@ -390,13 +456,10 @@ class MainActivity : ComponentActivity() {
             
             val inferenceTime = System.currentTimeMillis() - startTime
 
-            // Coordinate transformations & Depth sampling
+            // Coordinate transformations & Depth sampling (YOLO is in IMAGE_NORMALIZED space)
             val pointsToQuery = mutableListOf<Pair<Float, Float>>()
             
-            // Query center screen
-            pointsToQuery.add(0.5f to 0.5f)
-
-            // For each object, query 5 points (cross pattern: center, left-quarter, right-quarter, top-quarter, bottom-quarter)
+            // For each object, query 5 points (cross pattern) in IMAGE_NORMALIZED space
             for (obj in detectedList) {
                 val box = obj.boundingBox
                 val cx = (box.left + box.right) / 2f
@@ -410,21 +473,16 @@ class MainActivity : ComponentActivity() {
                 pointsToQuery.add(cx to (cy + h / 4f).coerceIn(0.01f, 0.99f))
             }
 
-            // Sync query depths from depthEstimator on GL thread
-            val allDepths = depth.getDepthAtPoints(pointsToQuery)
+            // Sync query depths directly using IMAGE_NORMALIZED coordinates
+            val allDepths = depth.getDepthAtPoints(pointsToQuery, isNormalizedImageSpace = true)
 
-            // Parse center depth
-            if (allDepths.isNotEmpty()) {
-                centerDistanceState = allDepths[0]
-            }
-
-            // Map and assemble display objects
-            val newDisplayedList = mutableListOf<DisplayedObject>()
+            // Map and assemble raw detection objects
+            val newRawList = mutableListOf<RawDetection>()
             var closestDistance = Float.MAX_VALUE
 
             for (i in detectedList.indices) {
                 val obj = detectedList[i]
-                val startIdx = 1 + 5 * i
+                val startIdx = 5 * i
                 
                 // Sample 5 depths and select minimum positive value
                 val objectDepths = allDepths.subList(startIdx, startIdx + 5).filter { it > 0f }
@@ -435,40 +493,22 @@ class MainActivity : ComponentActivity() {
                         closestDistance = measuredDistance
                     }
 
-                    // Map normalized coordinates from IMAGE coordinates to VIEWPORT coordinates using ARCore
-                    val box = obj.boundingBox
-                    val imgCoords = floatArrayOf(
-                        box.left, box.top,
-                        box.right, box.bottom
-                    )
-                    val viewCoords = FloatArray(4)
-                    try {
-                        frame.transformCoordinates2d(
-                            Coordinates2d.IMAGE_NORMALIZED,
-                            imgCoords,
-                            Coordinates2d.VIEW_NORMALIZED,
-                            viewCoords
-                        )
-                    } catch (e: Exception) {
-                        System.arraycopy(imgCoords, 0, viewCoords, 0, 4)
-                    }
-
-                    // Viewport space has (0,0) top-left, coordinate coordinates can flip depending on orientation
-                    val screenLeft = minOf(viewCoords[0], viewCoords[2])
-                    val screenTop = minOf(viewCoords[1], viewCoords[3])
-                    val screenRight = maxOf(viewCoords[0], viewCoords[2])
-                    val screenBottom = maxOf(viewCoords[1], viewCoords[3])
-
-                    newDisplayedList.add(
-                        DisplayedObject(
+                    newRawList.add(
+                        RawDetection(
                             label = obj.label,
                             labelThai = obj.labelThai,
                             confidence = obj.confidence,
-                            screenRect = RectF(screenLeft, screenTop, screenRight, screenBottom),
+                            boundingBox = obj.boundingBox,
                             distanceMeters = measuredDistance
                         )
                     )
                 }
+            }
+
+            // Update thread-safe raw detections
+            synchronized(rawDetectionsLock) {
+                rawDetections.clear()
+                rawDetections.addAll(newRawList)
             }
 
             // Trigger Proximity Vibration alerts
@@ -493,18 +533,19 @@ class MainActivity : ComponentActivity() {
             }
 
             // Calculate FPS & Latency stats for GUI
-            val totalTime = System.currentTimeMillis() - startTime
             frameCounter++
             val timeElapsed = System.currentTimeMillis() - fpsTimer
+            var fpsToReport = -1
             if (timeElapsed >= 1000L) {
-                inferenceFpsState = frameCounter
+                fpsToReport = frameCounter
                 frameCounter = 0
                 fpsTimer = System.currentTimeMillis()
             }
 
             mainScope.launch {
-                detectedObjectsState.clear()
-                detectedObjectsState.addAll(newDisplayedList)
+                if (fpsToReport != -1) {
+                    inferenceFpsState = fpsToReport
+                }
                 yoloLatencyState = inferenceTime
             }
         }

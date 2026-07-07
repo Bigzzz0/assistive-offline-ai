@@ -34,10 +34,12 @@ class DepthEstimator {
     // Thread-safe batch depth request queue for GL thread processing
     data class BatchDepthRequest(
         val points: List<Pair<Float, Float>>,
+        val isNormalizedImageSpace: Boolean,
         val callback: (List<Float>) -> Unit
     )
 
     private val pendingBatchRequests = java.util.concurrent.ConcurrentLinkedQueue<BatchDepthRequest>()
+
 
     /**
      * Checks if ARCore is supported and installed on this device.
@@ -120,13 +122,16 @@ class DepthEstimator {
      * Submits a list of coordinates to be mapped and sampled in batch on the GL thread.
      * Blocks the calling thread safely for up to 50ms.
      */
-    fun getDepthAtPoints(points: List<Pair<Float, Float>>): List<Float> {
+    fun getDepthAtPoints(
+        points: List<Pair<Float, Float>>,
+        isNormalizedImageSpace: Boolean = false
+    ): List<Float> {
         if (!isRealArCoreActive || points.isEmpty()) return List(points.size) { -1f }
 
         val latch = java.util.concurrent.CountDownLatch(1)
         var result = emptyList<Float>()
 
-        pendingBatchRequests.add(BatchDepthRequest(points) { depths ->
+        pendingBatchRequests.add(BatchDepthRequest(points, isNormalizedImageSpace) { depths ->
             result = depths
             latch.countDown()
         })
@@ -158,17 +163,24 @@ class DepthEstimator {
             for (i in batch.points.indices) {
                 val point = batch.points[i]
                 try {
-                    val viewCoords = floatArrayOf(point.first, point.second)
-                    val cpuCoords = FloatArray(2)
-                    frame.transformCoordinates2d(
-                        Coordinates2d.VIEW_NORMALIZED,
-                        viewCoords,
-                        Coordinates2d.IMAGE_NORMALIZED,
-                        cpuCoords
-                    )
+                    val u: Float
+                    val v: Float
                     
-                    val u = cpuCoords[0]
-                    val v = cpuCoords[1]
+                    if (batch.isNormalizedImageSpace) {
+                        u = point.first
+                        v = point.second
+                    } else {
+                        val viewCoords = floatArrayOf(point.first, point.second)
+                        val cpuCoords = FloatArray(2)
+                        frame.transformCoordinates2d(
+                            Coordinates2d.VIEW_NORMALIZED,
+                            viewCoords,
+                            Coordinates2d.IMAGE_NORMALIZED,
+                            cpuCoords
+                        )
+                        u = cpuCoords[0]
+                        v = cpuCoords[1]
+                    }
                     
                     val cx = (u * depthWidth).toInt().coerceIn(0, depthWidth - 1)
                     val cy = (v * depthHeight).toInt().coerceIn(0, depthHeight - 1)
@@ -212,9 +224,78 @@ class DepthEstimator {
         }
     }
 
+
+    /**
+     * Samples depth at a single point immediately on the calling thread.
+     * Useful for real-time sampling (like center reticle) on the GL thread.
+     */
+    fun getDepthAtPointImmediate(
+        point: Pair<Float, Float>,
+        isNormalizedImageSpace: Boolean = false,
+        frame: Frame? = null
+    ): Float {
+        val buffer = synchronized(this) { depthBuffer } ?: return -1f
+        try {
+            val u: Float
+            val v: Float
+            
+            if (isNormalizedImageSpace) {
+                u = point.first
+                v = point.second
+            } else {
+                val frameObj = frame ?: return -1f
+                val viewCoords = floatArrayOf(point.first, point.second)
+                val cpuCoords = FloatArray(2)
+                frameObj.transformCoordinates2d(
+                    Coordinates2d.VIEW_NORMALIZED,
+                    viewCoords,
+                    Coordinates2d.IMAGE_NORMALIZED,
+                    cpuCoords
+                )
+                u = cpuCoords[0]
+                v = cpuCoords[1]
+            }
+            
+            val cx = (u * depthWidth).toInt().coerceIn(0, depthWidth - 1)
+            val cy = (v * depthHeight).toInt().coerceIn(0, depthHeight - 1)
+            
+            val depthValues = mutableListOf<Float>()
+            val radius = 3
+            
+            for (dy in -radius..radius) {
+                for (dx in -radius..radius) {
+                    val x = (cx + dx).coerceIn(0, depthWidth - 1)
+                    val y = (cy + dy).coerceIn(0, depthHeight - 1)
+                    
+                    val byteOffset = y * depthRowStride + x * depthPixelStride
+                    val shortOffset = byteOffset / 2
+                    if (shortOffset in 0 until buffer.limit()) {
+                        val depthMillimeters = buffer.get(shortOffset).toInt() and 0x1FFF
+                        if (depthMillimeters > 0) {
+                            val depthMeters = depthMillimeters / 1000.0f
+                            if (depthMeters in 0.1f..8.0f) {
+                                depthValues.add(depthMeters)
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return if (depthValues.isNotEmpty()) {
+                depthValues.sort()
+                depthValues[depthValues.size / 2]
+            } else {
+                -1f
+            }
+        } catch (e: Exception) {
+            return -1f
+        }
+    }
+
     fun isDepthAvailable(): Boolean = synchronized(this) {
         depthBuffer != null
     }
+
 
     fun onResume() {
         if (isRealArCoreActive) {
