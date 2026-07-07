@@ -28,6 +28,8 @@ class DataFusionPipeline {
                 
                 var detectedEntities: [String] = []
                 
+                var fusionDetectedObjects: [iOSDetectedObject] = []
+                
                 if let firstObservation = observations.first,
                    let salientObjects = firstObservation.salientObjects {
                     // ตรวจหาวัตถุสูงสุด 3 ชิ้นเพื่อความรวดเร็วและไม่สับสน
@@ -35,7 +37,8 @@ class DataFusionPipeline {
                     
                     for object in targetObjects {
                         let bbox = object.boundingBox
-                        let label = "วัตถุเบื้องหน้า"
+                        let label = "salient_object"
+                        let labelThai = "วัตถุเบื้องหน้า"
                         
                         // คำนวณพิกัดกึ่งกลาง Bounding Box
                         let centerX = bbox.midX
@@ -63,7 +66,16 @@ class DataFusionPipeline {
                             direction = "อยู่ตรงกลางข้างหน้า"
                         }
                         
-                        detectedEntities.append(String(format: "พบ %@ ระยะ %.1f เมตร %@", label, depth, direction))
+                        detectedEntities.append(String(format: "พบ %@ ระยะ %.1f เมตร %@", labelThai, depth, direction))
+                        
+                        fusionDetectedObjects.append(
+                            iOSDetectedObject(
+                                label: label,
+                                labelThai: labelThai,
+                                boundingBox: bbox,
+                                distance: depth
+                            )
+                        )
                     }
                 }
                 
@@ -85,11 +97,13 @@ class DataFusionPipeline {
                 
                 DispatchQueue.main.async {
                     self.isProcessing = false
+                    ARDepthPipeline.shared.detectedObjects = fusionDetectedObjects
                     completion(rawText)
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.isProcessing = false
+                    ARDepthPipeline.shared.detectedObjects = []
                     completion("สภาพแวดล้อมเบื้องหน้า: ไม่สามารถวิเคราะห์ได้")
                 }
             }

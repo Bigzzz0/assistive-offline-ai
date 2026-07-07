@@ -77,6 +77,8 @@ struct ContentView: View {
     @State private var isBeepAlertMuted: Bool = AudioPipeline.shared.isBeepAlertMuted
     @State private var isBlackScreenMode: Bool = false
     @ObservedObject private var speechInputManager = SpeechInputManager.shared
+    @ObservedObject private var arDepthPipeline = ARDepthPipeline.shared
+    @State private var isFullScreenPreview: Bool = false
     
     @Environment(\.dynamicTypeSize) private var sizeCategory
     
@@ -240,6 +242,39 @@ struct ContentView: View {
         }
     }
     
+    private var boundingBoxesOverlay: some View {
+        GeometryReader { geometry in
+            ForEach(arDepthPipeline.detectedObjects) { obj in
+                let rect = obj.boundingBox
+                let width = rect.width * geometry.size.width
+                let height = rect.height * geometry.size.height
+                let x = rect.origin.x * geometry.size.width
+                let y = (1.0 - rect.origin.y - rect.size.height) * geometry.size.height
+                
+                let isDanger = obj.distance >= 0.01 && obj.distance <= 1.2
+                let color = isDanger ? Color.red : Color.green
+                
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(color, lineWidth: 2.5)
+                        .shadow(color: color.opacity(0.4), radius: 3)
+                        .frame(width: max(width, 0), height: max(height, 0))
+                    
+                    let labelText = obj.distance > 0 ? String(format: "%@ (%.1fม)", obj.labelThai, obj.distance) : obj.labelThai
+                    Text(labelText)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(color.opacity(0.85))
+                        .cornerRadius(4)
+                        .offset(y: -22)
+                }
+                .position(x: x + width / 2.0, y: y + height / 2.0)
+            }
+        }
+    }
+
     private var cameraViewport: some View {
         ZStack {
             if cameraAuthorized {
@@ -280,8 +315,29 @@ struct ContentView: View {
                 }
             }
             
+            boundingBoxesOverlay
+            
             VStack {
+                HStack {
+                    Spacer()
+                    Button(action: {
+                        withAnimation(.easeInOut) {
+                            isFullScreenPreview.toggle()
+                        }
+                        HapticManager.shared.vibrateGeneralInfo()
+                    }) {
+                        Image(systemName: isFullScreenPreview ? "arrows.merge" : "arrows.expand")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(12)
+                            .background(Color.black.opacity(0.55))
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(Color.white.opacity(0.3), lineWidth: 1))
+                    }
+                    .padding([.top, .trailing], 16)
+                }
                 Spacer()
+                
                 Text(isProcessing ? "กำลังประมวลผล..." : "แตะสองครั้งเพื่อวิเคราะห์ภาพ")
                     .font(.system(.caption, design: .default, weight: .semibold))
                     .foregroundColor(.white.opacity(0.8))
@@ -289,15 +345,19 @@ struct ContentView: View {
                     .padding(.vertical, 6)
                     .background(Color.black.opacity(0.6))
                     .cornerRadius(10)
-                    .padding(.bottom, 10)
+                    .padding(.bottom, 16)
             }
         }
-        .frame(minHeight: 250)
-        .cornerRadius(16)
+        .frame(height: isFullScreenPreview ? nil : 250)
+        .cornerRadius(isFullScreenPreview ? 0 : 16)
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(currentMode.accentColor, lineWidth: 2)
-                .shadow(color: currentMode.accentColor.opacity(0.3), radius: 6)
+            Group {
+                if !isFullScreenPreview {
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(currentMode.accentColor, lineWidth: 2)
+                        .shadow(color: currentMode.accentColor.opacity(0.3), radius: 6)
+                }
+            }
         )
         .gesture(
             TapGesture(count: 2).onEnded {
@@ -747,7 +807,11 @@ struct ContentView: View {
                     headerView
                     activeModeBannerAndSpeedRow
                     userSettingsToggles
-                    cameraViewport
+                    if !isFullScreenPreview {
+                        cameraViewport
+                    } else {
+                        Color.clear.frame(height: 250)
+                    }
                     statusAndOutputViews
                     actionButtons
                     devAndModelToggles
@@ -772,6 +836,14 @@ struct ContentView: View {
                     announceMode()
                 }
             )
+            if isFullScreenPreview {
+                ZStack {
+                    Color.black.edgesIgnoringSafeArea(.all)
+                    cameraViewport
+                        .edgesIgnoringSafeArea(.all)
+                }
+                .transition(.opacity)
+            }
             
             if isBlackScreenMode {
                 Color.black

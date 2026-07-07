@@ -2,8 +2,10 @@ import ARKit
 import Vision
 import Foundation
 
-class ARDepthPipeline: NSObject, ARSessionDelegate {
+class ARDepthPipeline: NSObject, ARSessionDelegate, ObservableObject {
     static let shared = ARDepthPipeline()
+    
+    @Published var detectedObjects: [iOSDetectedObject] = []
     
     private(set) var session: ARSession?
     private var isProcessing = false
@@ -42,6 +44,9 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
         isActive = false
         savedConfig = nil
         lastDetectedPeopleWorldPositions.removeAll()
+        DispatchQueue.main.async {
+            self.detectedObjects.removeAll()
+        }
     }
     
     func pauseSession() {
@@ -130,12 +135,24 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
                     "status": "วัดระยะเรียลไทม์"
                 ]
                 NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
+                let targetObj = iOSDetectedObject(
+                    label: "target",
+                    labelThai: "เป้าหมาย",
+                    boundingBox: CGRect(x: 0.45, y: 0.45, width: 0.1, height: 0.1),
+                    distance: depth
+                )
+                DispatchQueue.main.async {
+                    self.detectedObjects = [targetObj]
+                }
             } else {
                 let userInfo: [AnyHashable: Any] = [
                     "aiResult": "ระยะทาง: ไม่สามารถวัดได้",
                     "status": "วัดระยะเรียลไทม์"
                 ]
                 NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
+                DispatchQueue.main.async {
+                    self.detectedObjects = []
+                }
             }
             self.isProcessing = false
             return
@@ -179,12 +196,16 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
                 "status": "ไม่พบคนรอบตัว"
             ]
             NotificationCenter.default.post(name: NSNotification.Name("AccessibilityPipelineDidUpdate"), object: nil, userInfo: userInfo)
+            DispatchQueue.main.async {
+                self.detectedObjects = []
+            }
             return
         }
         
         var minDistance: Float = 999.0
         var currentPositions: [simd_float3] = []
         var closestPersonLocalPos: simd_float3? = nil
+        var newDetectedObjects: [iOSDetectedObject] = []
         
         for observation in observations {
             let bbox = observation.boundingBox // Normalized [0, 1] bottom-left origin in oriented space
@@ -237,10 +258,23 @@ class ARDepthPipeline: NSObject, ARSessionDelegate {
                 let localPos4 = cameraTransform.inverse * simd_make_float4(projected3D.x, projected3D.y, projected3D.z, 1.0)
                 closestPersonLocalPos = simd_make_float3(localPos4.x, localPos4.y, localPos4.z)
             }
+            
+            newDetectedObjects.append(
+                iOSDetectedObject(
+                    label: "person",
+                    labelThai: "คน",
+                    boundingBox: bbox,
+                    distance: distance
+                )
+            )
         }
         
         self.lastDetectedPeopleWorldPositions = currentPositions
         AudioPipeline.shared.updateDistanceAlert(distance: minDistance, position: closestPersonLocalPos)
+        
+        DispatchQueue.main.async {
+            self.detectedObjects = newDetectedObjects
+        }
         
         let status: String
         let result: String
