@@ -2,9 +2,10 @@ name: Build iOS Application
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, Ar-Core-and-Object-detection ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, Ar-Core-and-Object-detection ]
+  workflow_dispatch:
 
 permissions:
   contents: write
