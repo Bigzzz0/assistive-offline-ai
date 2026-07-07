@@ -414,7 +414,7 @@ class MainActivity : ComponentActivity() {
                 val now = System.currentTimeMillis()
                 if (now - lastProcessedTime >= 200L) {
                     lastProcessedTime = now
-                    frame.acquireCameraImage()?.use { cameraImage ->
+                    frame.acquireCameraImage().use { cameraImage ->
                         try {
                             val bitmap = cameraImage.toBitmap()
                             synchronized(frameLock) {
@@ -956,7 +956,7 @@ class MainActivity : ComponentActivity() {
                     selectedTabIndex = if (ttsLanguageState == "th") 0 else 1,
                     containerColor = Color.Black.copy(alpha = 0.2f),
                     indicator = { tabPositions ->
-                        TabRowDefaults.Indicator(
+                        TabRowDefaults.SecondaryIndicator(
                             modifier = Modifier.tabIndicatorOffset(tabPositions[if (ttsLanguageState == "th") 0 else 1]),
                             color = MaterialTheme.colorScheme.primary
                         )
