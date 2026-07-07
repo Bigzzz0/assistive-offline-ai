@@ -42,8 +42,10 @@ class ObjectDetector(private val context: Context) {
     private var interpreter: Interpreter? = null
     private var gpuDelegate: GpuDelegate? = null
     private var nnApiDelegate: NnApiDelegate? = null
-    private var isInitialized = false
     private var outputArray: Array<Array<FloatArray>>? = null
+    private var isInitialized = false
+    var lastInitError: String? = null
+        private set
 
     // Pre-allocated static buffers for zero-allocation real-time inference
     private var scaledBitmap: Bitmap? = null
@@ -138,6 +140,7 @@ class ObjectDetector(private val context: Context) {
             Log.i(TAG, "ObjectDetector initialized successfully")
             true
         } catch (e: Throwable) {
+            lastInitError = "${e.javaClass.simpleName}: ${e.message ?: "Unknown Error"}"
             Log.e(TAG, "ObjectDetector initialization failed: ${e.message}", e)
             false
         }

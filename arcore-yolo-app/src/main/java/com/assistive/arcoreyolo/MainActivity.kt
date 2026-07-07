@@ -185,11 +185,13 @@ class MainActivity : ComponentActivity() {
                     Log.i(TAG, "ObjectDetector (YOLO) initialized successfully.")
                     mainScope.launch { yoloStatusState = "YOLO Active" }
                 } else {
-                    mainScope.launch { yoloStatusState = "YOLO Failed" }
+                    val err = detector.lastInitError ?: "Failed to load model"
+                    mainScope.launch { yoloStatusState = "YOLO Failed: $err" }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "YOLO initialization failed", e)
-                mainScope.launch { yoloStatusState = "YOLO Error: ${e.message}" }
+            } catch (t: Throwable) {
+                Log.e(TAG, "YOLO initialization failed", t)
+                val errMsg = "${t.javaClass.simpleName}: ${t.message ?: "Unknown Error"}"
+                mainScope.launch { yoloStatusState = "YOLO Error: $errMsg" }
             }
         }.start()
 
