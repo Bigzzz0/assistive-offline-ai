@@ -57,6 +57,7 @@ class VisionPipeline(
     private val SCENE_DIFF_THRESHOLD = 0.08f // 8% difference threshold
     private var lastProcessedTime = 0L
     private val FRAME_INTERVAL_MS = 200L // 5 FPS (200ms)
+    @Volatile private var isProcessing = false
 
     init {
         registerSensors()
@@ -108,13 +109,25 @@ class VisionPipeline(
         return ImageAnalysis.Analyzer { imageProxy ->
             val now = System.currentTimeMillis()
             val frameRequested = isFrameRequested()
+            
+            if (isProcessing) {
+                imageProxy.close()
+                return@Analyzer
+            }
+            
             if (!frameRequested && (now - lastProcessedTime < FRAME_INTERVAL_MS)) {
                 imageProxy.close()
                 return@Analyzer
             }
+            
             lastProcessedTime = now
+            isProcessing = true
             executor.execute {
-                processImage(imageProxy)
+                try {
+                    processImage(imageProxy)
+                } finally {
+                    isProcessing = false
+                }
             }
         }
     }

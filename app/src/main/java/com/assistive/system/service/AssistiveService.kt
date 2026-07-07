@@ -386,6 +386,7 @@ class AssistiveService : Service() {
                             audioPipeline.speak(validatedOutput) {
                                 if (!resumed) {
                                     resumed = true
+                                    
                                     if (cont.isActive) {
                                         cont.resumeWith(Result.success(Unit))
                                     }

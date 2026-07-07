@@ -202,6 +202,7 @@ class MainActivity : ComponentActivity() {
         
         private val backgroundRenderer = BackgroundRenderer()
         private var lastProcessedTime = 0L
+        @Volatile private var isProcessingFrame = false
 
         override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
             GLES20.glClearColor(0.1f, 0.1f, 0.1f, 1.0f)
@@ -280,7 +281,7 @@ class MainActivity : ComponentActivity() {
                 }
                 
                 val now = System.currentTimeMillis()
-                if (now - lastProcessedTime >= 200L) {
+                if (now - lastProcessedTime >= 200L && !isProcessingFrame) {
                     lastProcessedTime = now
                     val cameraImage = try {
                         frame.acquireCameraImage()
@@ -288,19 +289,21 @@ class MainActivity : ComponentActivity() {
                         null
                     }
                     if (cameraImage != null) {
-                        try {
-                            val bitmap = cameraImage.toBitmap()
-                            cameraExecutor.execute {
+                        isProcessingFrame = true
+                        cameraExecutor.execute {
+                            try {
+                                val bitmap = cameraImage.toBitmap()
                                 try {
                                     visionPipeline?.processBitmapFromArCore(bitmap)
                                 } catch (e: Exception) {
                                     Log.w("ArCoreRenderer", "Failed to process ARCore frame: ${e.message}")
                                 }
+                            } catch (e: Exception) {
+                                Log.w("ArCoreRenderer", "Failed to convert camera frame to bitmap: ${e.message}")
+                            } finally {
+                                cameraImage.close()
+                                isProcessingFrame = false
                             }
-                        } catch (e: Exception) {
-                            Log.w("ArCoreRenderer", "Failed to convert camera frame to bitmap: ${e.message}")
-                        } finally {
-                            cameraImage.close()
                         }
                     }
                 }
