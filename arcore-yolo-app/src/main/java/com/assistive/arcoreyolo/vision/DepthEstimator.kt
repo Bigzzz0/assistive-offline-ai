@@ -149,16 +149,32 @@ class DepthEstimator {
      * Process all queued batch requests synchronously on the GL thread using the current live frame.
      */
     fun processPendingDepthRequests(frame: Frame) {
-        val buffer = synchronized(this) { depthBuffer }
+        val buffer: java.nio.ShortBuffer
+        val w: Int
+        val h: Int
+        val rowStr: Int
+        val pixStr: Int
+        
+        synchronized(this) {
+            val buf = depthBuffer
+            if (buf == null || depthWidth <= 0 || depthHeight <= 0) {
+                // Return -1 for all pending batches to unblock callers if depth is unavailable
+                while (pendingBatchRequests.isNotEmpty()) {
+                    val batch = pendingBatchRequests.poll()
+                    batch?.callback?.invoke(List(batch.points.size) { -1f })
+                }
+                return
+            }
+            buffer = buf
+            w = depthWidth
+            h = depthHeight
+            rowStr = depthRowStride
+            pixStr = depthPixelStride
+        }
         
         while (true) {
             val batch = pendingBatchRequests.poll() ?: break
             
-            if (buffer == null) {
-                batch.callback(List(batch.points.size) { -1f })
-                continue
-            }
-
             val results = ArrayList<Float>(batch.points.size)
             for (i in batch.points.indices) {
                 val point = batch.points[i]
@@ -182,8 +198,8 @@ class DepthEstimator {
                         v = cpuCoords[1]
                     }
                     
-                    val cx = (u * depthWidth).toInt().coerceIn(0, depthWidth - 1)
-                    val cy = (v * depthHeight).toInt().coerceIn(0, depthHeight - 1)
+                    val cx = (u * w).toInt().coerceIn(0, w - 1)
+                    val cy = (v * h).toInt().coerceIn(0, h - 1)
                     
                     // Sample 7x7 window to filter noise and invalid pixels
                     val depthValues = mutableListOf<Float>()
@@ -191,10 +207,10 @@ class DepthEstimator {
                     
                     for (dy in -radius..radius) {
                         for (dx in -radius..radius) {
-                            val x = (cx + dx).coerceIn(0, depthWidth - 1)
-                            val y = (cy + dy).coerceIn(0, depthHeight - 1)
+                            val x = (cx + dx).coerceIn(0, w - 1)
+                            val y = (cy + dy).coerceIn(0, h - 1)
                             
-                            val byteOffset = y * depthRowStride + x * depthPixelStride
+                            val byteOffset = y * rowStr + x * pixStr
                             val shortOffset = byteOffset / 2
                             if (shortOffset in 0 until buffer.limit()) {
                                 // Apply 0x1FFF mask to extract clean 13-bit depth in millimeters (ignoring top 3 confidence bits)
@@ -234,7 +250,22 @@ class DepthEstimator {
         isNormalizedImageSpace: Boolean = false,
         frame: Frame? = null
     ): Float {
-        val buffer = synchronized(this) { depthBuffer } ?: return -1f
+        val buffer: java.nio.ShortBuffer
+        val w: Int
+        val h: Int
+        val rowStr: Int
+        val pixStr: Int
+        
+        synchronized(this) {
+            val buf = depthBuffer
+            if (buf == null || depthWidth <= 0 || depthHeight <= 0) return -1f
+            buffer = buf
+            w = depthWidth
+            h = depthHeight
+            rowStr = depthRowStride
+            pixStr = depthPixelStride
+        }
+        
         try {
             val u: Float
             val v: Float
@@ -256,18 +287,18 @@ class DepthEstimator {
                 v = cpuCoords[1]
             }
             
-            val cx = (u * depthWidth).toInt().coerceIn(0, depthWidth - 1)
-            val cy = (v * depthHeight).toInt().coerceIn(0, depthHeight - 1)
+            val cx = (u * w).toInt().coerceIn(0, w - 1)
+            val cy = (v * h).toInt().coerceIn(0, h - 1)
             
             val depthValues = mutableListOf<Float>()
             val radius = 3
             
             for (dy in -radius..radius) {
                 for (dx in -radius..radius) {
-                    val x = (cx + dx).coerceIn(0, depthWidth - 1)
-                    val y = (cy + dy).coerceIn(0, depthHeight - 1)
+                    val x = (cx + dx).coerceIn(0, w - 1)
+                    val y = (cy + dy).coerceIn(0, h - 1)
                     
-                    val byteOffset = y * depthRowStride + x * depthPixelStride
+                    val byteOffset = y * rowStr + x * pixStr
                     val shortOffset = byteOffset / 2
                     if (shortOffset in 0 until buffer.limit()) {
                         val depthMillimeters = buffer.get(shortOffset).toInt() and 0x1FFF
@@ -291,6 +322,7 @@ class DepthEstimator {
             return -1f
         }
     }
+
 
     fun isDepthAvailable(): Boolean = synchronized(this) {
         depthBuffer != null
