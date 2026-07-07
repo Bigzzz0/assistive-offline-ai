@@ -99,7 +99,7 @@ class ObjectDetector(private val context: Context) {
                 options.addDelegate(gpuDelegate!!)
                 useGpu = true
                 Log.i(TAG, "ObjectDetector: GPU Delegate activated")
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 gpuDelegate?.close(); gpuDelegate = null
                 Log.w(TAG, "ObjectDetector: GPU Delegate failed (${e.message}), trying NNAPI")
                 options.delegates.clear()
@@ -111,7 +111,7 @@ class ObjectDetector(private val context: Context) {
                     nnApiDelegate = NnApiDelegate()
                     options.addDelegate(nnApiDelegate!!)
                     Log.i(TAG, "ObjectDetector: NNAPI Delegate activated")
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     nnApiDelegate?.close(); nnApiDelegate = null
                     Log.w(TAG, "ObjectDetector: NNAPI failed (${e.message}), falling back to CPU")
                     options.delegates.clear()
@@ -137,7 +137,7 @@ class ObjectDetector(private val context: Context) {
             isInitialized = true
             Log.i(TAG, "ObjectDetector initialized successfully")
             true
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "ObjectDetector initialization failed: ${e.message}", e)
             false
         }
