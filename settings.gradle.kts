@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "AssistiveSystem"
 include(":app")
+include(":arcore-yolo-app")
+
