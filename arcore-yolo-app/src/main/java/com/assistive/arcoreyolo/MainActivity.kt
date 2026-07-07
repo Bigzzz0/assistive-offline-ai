@@ -106,6 +106,7 @@ class MainActivity : ComponentActivity() {
     private var centerDistanceState by mutableStateOf(-1f)
     private var arCoreStatusState by mutableStateOf("Initializing...")
     private var arCoreActiveState by mutableStateOf(false)
+    private var yoloStatusState by mutableStateOf("YOLO Initializing...")
     private var yoloLatencyState by mutableStateOf(0L)
     private var inferenceFpsState by mutableStateOf(0)
 
@@ -182,9 +183,13 @@ class MainActivity : ComponentActivity() {
                 if (detector.initialize()) {
                     objectDetector = detector
                     Log.i(TAG, "ObjectDetector (YOLO) initialized successfully.")
+                    mainScope.launch { yoloStatusState = "YOLO Active" }
+                } else {
+                    mainScope.launch { yoloStatusState = "YOLO Failed" }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "YOLO initialization failed", e)
+                mainScope.launch { yoloStatusState = "YOLO Error: ${e.message}" }
             }
         }.start()
 
@@ -488,21 +493,19 @@ class MainActivity : ComponentActivity() {
                 val objectDepths = allDepths.subList(startIdx, startIdx + 5).filter { it > 0f }
                 val measuredDistance = if (objectDepths.isNotEmpty()) objectDepths.minOrNull() ?: -1f else -1f
 
-                if (measuredDistance > 0f) {
-                    if (measuredDistance < closestDistance) {
-                        closestDistance = measuredDistance
-                    }
-
-                    newRawList.add(
-                        RawDetection(
-                            label = obj.label,
-                            labelThai = obj.labelThai,
-                            confidence = obj.confidence,
-                            boundingBox = obj.boundingBox,
-                            distanceMeters = measuredDistance
-                        )
-                    )
+                if (measuredDistance > 0f && measuredDistance < closestDistance) {
+                    closestDistance = measuredDistance
                 }
+
+                newRawList.add(
+                    RawDetection(
+                        label = obj.label,
+                        labelThai = obj.labelThai,
+                        confidence = obj.confidence,
+                        boundingBox = obj.boundingBox,
+                        distanceMeters = measuredDistance
+                    )
+                )
             }
 
             // Update thread-safe raw detections
@@ -659,7 +662,7 @@ class MainActivity : ComponentActivity() {
                     val bottom = r.bottom * h
                     
                     // Danger items (under 1.2 meters) highlighted in Coral Red, otherwise Emerald Green
-                    val isDanger = obj.distanceMeters < 1.2f
+                    val isDanger = obj.distanceMeters in 0.01f..1.2f
                     val boxColor = if (isDanger) Color(0xFFEF4444) else Color(0xFF10B981)
 
                     // Draw Bounding box rectangle
@@ -671,10 +674,14 @@ class MainActivity : ComponentActivity() {
                     )
 
                     // Draw translucent label badge background
-                    val labelText = if (ttsLanguageState == "th") {
-                        "${obj.labelThai} (${String.format(Locale.US, "%.1f", obj.distanceMeters)}m)"
+                    val labelText = if (obj.distanceMeters > 0f) {
+                        if (ttsLanguageState == "th") {
+                            "${obj.labelThai} (${String.format(Locale.US, "%.1f", obj.distanceMeters)}m)"
+                        } else {
+                            "${obj.label} (${String.format(Locale.US, "%.1f", obj.distanceMeters)}m)"
+                        }
                     } else {
-                        "${obj.label} (${String.format(Locale.US, "%.1f", obj.distanceMeters)}m)"
+                        if (ttsLanguageState == "th") obj.labelThai else obj.label
                     }
                     
                     // Calculate quick approximate text dimensions for badge sizing
@@ -775,6 +782,21 @@ class MainActivity : ComponentActivity() {
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = arCoreStatusState,
+                                color = Color.LightGray,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(if (objectDetector != null) Color(0xFF10B981) else Color(0xFFF59E0B))
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = yoloStatusState,
                                 color = Color.LightGray,
                                 fontSize = 11.sp
                             )
